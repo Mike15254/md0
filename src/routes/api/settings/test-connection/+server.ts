@@ -1,110 +1,60 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireAuth } from '$lib/server/auth.js';
-import { query } from '$lib/server/database.js';
-import { spawn } from 'child_process';
+import { systemService } from '$lib/server/system.js';
 
 export const POST: RequestHandler = async ({ locals }) => {
 	try {
 		const user = requireAuth(locals);
 
-		// Get VPS settings from database
-		const settingsResult = await query(
-			`SELECT key, value FROM settings WHERE category = 'system' AND key IN ('vps_hostname', 'vps_ip', 'ssh_port', 'ssh_key_path')`
-		);
+		// Test local system connectivity
+		// Since the app is running locally, we test basic system commands
+		const tests = [
+			{ name: 'Docker', command: 'docker version' },
+			{ name: 'Git', command: 'git --version' },
+			{ name: 'System Info', command: 'uname -a' }
+		];
 
-		const settings: Record<string, string> = {};
-		for (const row of settingsResult) {
-			settings[row.key] = row.value;
-		}
+		const results = [];
+		let allPassed = true;
 
-		const { vps_hostname, vps_ip, ssh_port = '22', ssh_key_path } = settings;
-
-		if (!vps_hostname && !vps_ip) {
-			return json({
-				success: false,
-				error: 'VPS hostname or IP address not configured'
-			}, { status: 400 });
-		}
-
-		// Test SSH connection
-		const target = vps_hostname || vps_ip;
-		const port = ssh_port || '22';
-
-		return new Promise((resolve) => {
-			const timeout = setTimeout(() => {
-				resolve(json({
-					success: false,
-					error: 'Connection timeout (10 seconds)'
-				}));
-			}, 10000);
-
-			// Use ssh command to test connection
-			const sshArgs = [
-				'-o', 'ConnectTimeout=5',
-				'-o', 'BatchMode=yes',
-				'-o', 'StrictHostKeyChecking=no',
-				'-p', port
-			];
-
-			if (ssh_key_path) {
-				sshArgs.push('-i', ssh_key_path);
-			}
-
-			sshArgs.push(`root@${target}`, 'echo "Connection successful"');
-
-			const ssh = spawn('ssh', sshArgs);
-			let output = '';
-			let error = '';
-
-			ssh.stdout.on('data', (data) => {
-				output += data.toString();
-			});
-
-			ssh.stderr.on('data', (data) => {
-				error += data.toString();
-			});
-
-			ssh.on('close', (code) => {
-				clearTimeout(timeout);
-				
-				if (code === 0 && output.includes('Connection successful')) {
-					resolve(json({
-						success: true,
-						message: 'SSH connection successful',
-						details: {
-							target,
-							port,
-							output: output.trim()
-						}
-					}));
+		for (const test of tests) {
+			try {
+				const result = await systemService.execCommand(test.command);
+				if (result.code === 0) {
+					results.push({
+						name: test.name,
+						status: 'passed',
+						output: result.stdout.trim()
+					});
 				} else {
-					resolve(json({
-						success: false,
-						error: `SSH connection failed (exit code: ${code})`,
-						details: {
-							target,
-							port,
-							stderr: error.trim(),
-							stdout: output.trim()
-						}
-					}));
+					results.push({
+						name: test.name,
+						status: 'failed',
+						error: result.stderr || 'Command failed'
+					});
+					allPassed = false;
 				}
-			});
+			} catch (error) {
+				results.push({
+					name: test.name,
+					status: 'failed',
+					error: error instanceof Error ? error.message : 'Unknown error'
+				});
+				allPassed = false;
+			}
+		}
 
-			ssh.on('error', (err) => {
-				clearTimeout(timeout);
-				resolve(json({
-					success: false,
-					error: `SSH command failed: ${err.message}`
-				}));
-			});
+		return json({
+			success: allPassed,
+			message: allPassed ? 'All system tests passed' : 'Some system tests failed',
+			details: results
 		});
 	} catch (error) {
 		console.error('Test connection error:', error);
 		return json({
 			success: false,
-			error: error instanceof Error ? error.message : 'Failed to test connection'
+			error: error instanceof Error ? error.message : 'Failed to test system connectivity'
 		}, { status: 500 });
 	}
 };

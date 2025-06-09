@@ -42,6 +42,22 @@ export const dbUtils = {
         return result[0];
     },
 
+    async createAdminUser(username: string, passwordHash: string, email?: string) {
+        const result = await db`
+            INSERT INTO users (username, password_hash, email, is_admin)
+            VALUES (${username}, ${passwordHash}, ${email || null}, true)
+            RETURNING id, username, email, is_admin, created_at
+        `;
+        return result[0];
+    },
+
+    async checkAdminExists(): Promise<boolean> {
+        const result = await db`
+            SELECT 1 FROM users WHERE is_admin = true LIMIT 1
+        `;
+        return result.length > 0;
+    },
+
     async getProjects(userId?: number) {
         if (userId) {
             const result = await db`
@@ -61,32 +77,6 @@ export const dbUtils = {
             `;
             return result;
         }
-    },
-
-    async createProject(project: {
-        name: string;
-        github_url: string;
-        github_branch?: string;
-        build_command?: string;
-        start_command?: string;
-        port?: number;
-        environment_variables?: Record<string, string>;
-        created_by: number;
-    }) {
-        const result = await db`
-            INSERT INTO projects (
-                name, github_url, github_branch, build_command, 
-                start_command, port, environment_variables, created_by
-            )
-            VALUES (
-                ${project.name}, ${project.github_url}, ${project.github_branch || 'main'},
-                ${project.build_command || 'bun install && bun run build'},
-                ${project.start_command || 'bun start'}, ${project.port || null},
-                ${JSON.stringify(project.environment_variables || {})}, ${project.created_by}
-            )
-            RETURNING *
-        `;
-        return result[0];
     },
 
     async updateProjectStatus(projectId: number, status: string, containerId?: string, processId?: number) {
@@ -227,20 +217,6 @@ export const dbUtils = {
         // For database instances, we could create a separate log table or use the same one
     },
 
-    async recordSystemMetrics(metrics: {
-        cpu_usage: number;
-        memory_usage: number;
-        disk_usage: number;
-        active_projects: number;
-        uptime_seconds: number;
-    }) {
-        await db`
-            INSERT INTO system_metrics (cpu_usage, memory_usage, disk_usage, active_projects, uptime_seconds)
-            VALUES (${metrics.cpu_usage}, ${metrics.memory_usage}, ${metrics.disk_usage}, 
-                    ${metrics.active_projects}, ${metrics.uptime_seconds})
-        `;
-    },
-
     async getLatestSystemMetrics() {
         const result = await db`
             SELECT * FROM system_metrics 
@@ -248,6 +224,70 @@ export const dbUtils = {
             LIMIT 1
         `;
         return result[0] || null;
+    },
+
+    // Project management functions
+    async findProjectByName(name: string) {
+        const result = await db`
+            SELECT * FROM projects WHERE name = ${name}
+        `;
+        return result[0] || null;
+    },
+
+    async createProject(project: {
+        name: string;
+        description?: string;
+        github_url?: string;
+        domain?: string;
+        status?: string;
+        tech_stack?: string[];
+        created_at?: Date;
+        updated_at?: Date;
+        created_by?: number;
+    }) {
+        const result = await db`
+            INSERT INTO projects (
+                name, description, github_url, domain, status, tech_stack, 
+                created_at, updated_at, created_by
+            )
+            VALUES (
+                ${project.name}, 
+                ${project.description || null},
+                ${project.github_url || null}, 
+                ${project.domain || null},
+                ${project.status || 'inactive'}, 
+                ${JSON.stringify(project.tech_stack || [])},
+                ${project.created_at || new Date()}, 
+                ${project.updated_at || new Date()},
+                ${project.created_by || null}
+            )
+            RETURNING *
+        `;
+        return result[0];
+    },
+
+    async recordSystemMetrics(metrics: any) {
+        try {
+            await db`
+                INSERT INTO system_metrics (
+                    cpu_usage, memory_usage, disk_usage, active_projects,
+                    uptime_seconds, cpu_cores, memory_used_bytes, memory_total_bytes,
+                    disk_used_bytes, disk_total_bytes, hostname, boot_time,
+                    process_count, load_average, network_connections, failed_login_attempts,
+                    recorded_at
+                ) VALUES (
+                    ${metrics.cpu_usage}, ${metrics.memory_usage}, ${metrics.disk_usage}, 
+                    ${metrics.active_projects}, ${metrics.uptime_seconds}, ${metrics.cpu_cores},
+                    ${metrics.memory_used_bytes}, ${metrics.memory_total_bytes}, 
+                    ${metrics.disk_used_bytes}, ${metrics.disk_total_bytes}, ${metrics.hostname},
+                    ${metrics.boot_time}, ${metrics.process_count}, 
+                    ${JSON.stringify(metrics.load_average)}, ${metrics.network_connections},
+                    ${metrics.failed_login_attempts}, CURRENT_TIMESTAMP
+                )
+            `;
+        } catch (error) {
+            console.error('Failed to record system metrics:', error);
+        }
     }
 };
 

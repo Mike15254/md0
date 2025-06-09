@@ -1,8 +1,8 @@
-import { NodeSSH } from 'node-ssh';
-import { VPS_HOST, VPS_USERNAME, VPS_PASSWORD } from '$env/static/private';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { dbUtils } from './database.js';
 
-const ssh = new NodeSSH();
+const execAsync = promisify(exec);
 
 interface SystemMetrics {
     cpu_usage: number;
@@ -49,17 +49,22 @@ interface VPSInformation {
 }
 
 export const systemService = {
-    async connectToVPS(): Promise<boolean> {
+    // Helper function to determine if we're in development mode
+    isDevelopmentMode(): boolean {
+        return process.env.NODE_ENV === 'development';
+    },
+
+    // Helper function to execute commands locally
+    async execCommand(command: string): Promise<{ stdout: string; stderr: string; code: number }> {
         try {
-            await ssh.connect({
-                host: VPS_HOST,
-                username: VPS_USERNAME,
-                password: VPS_PASSWORD
-            });
-            return true;
-        } catch (error) {
-            console.error('Failed to connect to VPS:', error);
-            return false;
+            const { stdout, stderr } = await execAsync(command);
+            return { stdout, stderr, code: 0 };
+        } catch (error: any) {
+            return { 
+                stdout: error.stdout || '', 
+                stderr: error.stderr || error.message, 
+                code: error.code || 1 
+            };
         }
     },
 
@@ -126,6 +131,42 @@ export const systemService = {
         };
     },
 
+    // Register this monitoring app as a project in the database
+    async registerSelfAsProject(): Promise<void> {
+        try {
+            // Check if the monitoring project already exists
+            const existingProject = await dbUtils.findProjectByName('md0-monitoring');
+            
+            if (!existingProject) {
+                const hostname = await this.getHostname();
+                const projectData = {
+                    name: 'md0-monitoring',
+                    description: 'MD0 VPS Monitoring Dashboard - System monitoring and security dashboard for the VPS',
+                    github_url: 'https://github.com/mikemax/md0-monitoring',
+                    domain: `http://${hostname}:4173`, // Preview mode port
+                    status: 'running',
+                    tech_stack: ['SvelteKit', 'TypeScript', 'PostgreSQL', 'Docker'],
+                    created_at: new Date(),
+                    updated_at: new Date()
+                };
+
+                await dbUtils.createProject(projectData);
+                console.log('Monitoring app registered as project successfully');
+            }
+        } catch (error) {
+            console.error('Failed to register monitoring app as project:', error);
+        }
+    },
+
+    async getHostname(): Promise<string> {
+        try {
+            const result = await this.execCommand('hostname');
+            return result.stdout.trim() || 'localhost';
+        } catch (error) {
+            return 'localhost';
+        }
+    },
+
     async getSystemMetrics(): Promise<SystemMetrics | null> {
         try {
             // Return mock data in development mode
@@ -133,50 +174,47 @@ export const systemService = {
                 return this.getMockSystemMetrics();
             }
 
-            const connected = await this.connectToVPS();
-            if (!connected) return this.getMockSystemMetrics(); // Return mock data as fallback
-
             // Get CPU usage
-            const cpuResult = await ssh.execCommand(
+            const cpuResult = await this.execCommand(
                 "top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}'"
             );
             const cpuUsage = parseFloat(cpuResult.stdout.trim()) || 0;
 
             // Get memory usage
-            const memResult = await ssh.execCommand(
+            const memResult = await this.execCommand(
                 "free | grep Mem | awk '{printf \"%.2f\", $3/$2 * 100.0}'"
             );
             const memoryUsage = parseFloat(memResult.stdout.trim()) || 0;
 
             // Get disk usage
-            const diskResult = await ssh.execCommand(
+            const diskResult = await this.execCommand(
                 "df -h / | awk 'NR==2{printf \"%.2f\", $5}' | sed 's/%//'"
             );
             const diskUsage = parseFloat(diskResult.stdout.trim()) || 0;
 
             // Get uptime in seconds
-            const uptimeResult = await ssh.execCommand("cat /proc/uptime | awk '{print $1}'");
+            const uptimeResult = await this.execCommand("cat /proc/uptime | awk '{print $1}'");
             const uptimeSeconds = Math.floor(parseFloat(uptimeResult.stdout.trim()) || 0);
 
             // Count active Docker containers (our projects)
-            const containerResult = await ssh.execCommand(
+            const containerResult = await this.execCommand(
                 "docker ps --filter 'name=md0-' --format '{{.Names}}' | wc -l"
             );
             const activeProjects = parseInt(containerResult.stdout.trim()) || 0;
 
-            // Get additional metrics
+            // Get additional metrics in parallel
             const [cpuCoresResult, memoryUsedResult, memoryTotalResult, diskUsedResult, diskTotalResult, hostnameResult, bootTimeResult, processCountResult, loadAverageResult, networkConnectionsResult, failedLoginAttemptsResult] = await Promise.all([
-                ssh.execCommand("nproc"),
-                ssh.execCommand("free | grep Mem | awk '{print $3}'"),
-                ssh.execCommand("free | grep Mem | awk '{print $2}'"),
-                ssh.execCommand("df / | grep / | awk '{ print $3 }'"),
-                ssh.execCommand("df / | grep / | awk '{ print $2 }'"),
-                ssh.execCommand("hostname"),
-                ssh.execCommand("awk '/^Boot/ {print $3, $4, $5}' /var/log/syslog"),
-                ssh.execCommand("ps aux | wc -l"),
-                ssh.execCommand("cat /proc/loadavg | awk '{print $1, $2, $3}'"),
-                ssh.execCommand("netstat -an | grep ESTABLISHED | wc -l"),
-                ssh.execCommand("grep 'Failed password' /var/log/auth.log | wc -l")
+                this.execCommand("nproc"),
+                this.execCommand("free | grep Mem | awk '{print $3}'"),
+                this.execCommand("free | grep Mem | awk '{print $2}'"),
+                this.execCommand("df / | grep / | awk '{ print $3 }'"),
+                this.execCommand("df / | grep / | awk '{ print $2 }'"),
+                this.execCommand("hostname"),
+                this.execCommand("stat -c %Y /proc/1"),
+                this.execCommand("ps aux | wc -l"),
+                this.execCommand("cat /proc/loadavg | awk '{print $1, $2, $3}'"),
+                this.execCommand("ss -tuln | wc -l"),
+                this.execCommand("grep 'Failed password' /var/log/auth.log 2>/dev/null | wc -l || echo '0'")
             ]);
 
             const metrics: SystemMetrics = {
@@ -191,7 +229,7 @@ export const systemService = {
                 disk_used_bytes: parseInt(diskUsedResult.stdout.trim()) || 0,
                 disk_total_bytes: parseInt(diskTotalResult.stdout.trim()) || 0,
                 hostname: hostnameResult.stdout.trim() || '',
-                boot_time: new Date(bootTimeResult.stdout.trim() || '').getTime() / 1000 || 0,
+                boot_time: parseInt(bootTimeResult.stdout.trim()) || 0,
                 process_count: parseInt(processCountResult.stdout.trim()) || 0,
                 load_average: loadAverageResult.stdout.trim().split(' ').map(Number),
                 network_connections: parseInt(networkConnectionsResult.stdout.trim()) || 0,
@@ -204,93 +242,39 @@ export const systemService = {
             return metrics;
         } catch (error) {
             console.error('Failed to get system metrics:', error);
-            return null;
+            return this.isDevelopmentMode() ? this.getMockSystemMetrics() : null;
         }
     },
 
     async getEnhancedSystemMetrics(): Promise<SystemMetrics | null> {
         try {
-            const connected = await this.connectToVPS();
-            if (!connected) return null;
+            // Return mock data in development mode
+            if (this.isDevelopmentMode()) {
+                return this.getMockSystemMetrics();
+            }
 
-            // Get basic metrics
+            // Get basic metrics first
             const basicMetrics = await this.getSystemMetrics();
-            if (!basicMetrics) return null;
-
-            // Get additional system information
-            const cpuCoresResult = await ssh.execCommand("nproc");
-            const cpu_cores = parseInt(cpuCoresResult.stdout.trim()) || 0;
-
-            // Get memory information in bytes
-            const memInfoResult = await ssh.execCommand("free -b | grep Mem");
-            const memInfo = memInfoResult.stdout.trim().split(/\s+/);
-            const memory_total_bytes = parseInt(memInfo[1]) || 0;
-            const memory_used_bytes = parseInt(memInfo[2]) || 0;
-
-            // Get disk information in bytes
-            const diskInfoResult = await ssh.execCommand("df -B1 / | awk 'NR==2{print $2, $3}'");
-            const diskInfo = diskInfoResult.stdout.trim().split(' ');
-            const disk_total_bytes = parseInt(diskInfo[0]) || 0;
-            const disk_used_bytes = parseInt(diskInfo[1]) || 0;
-
-            // Get hostname
-            const hostnameResult = await ssh.execCommand("hostname");
-            const hostname = hostnameResult.stdout.trim();
-
-            // Get boot time
-            const bootTimeResult = await ssh.execCommand("stat -c %Y /proc/1");
-            const boot_time = parseInt(bootTimeResult.stdout.trim()) || 0;
-
-            // Get process count
-            const processCountResult = await ssh.execCommand("ps aux | wc -l");
-            const process_count = parseInt(processCountResult.stdout.trim()) - 1; // subtract header
-
-            // Get load average
-            const loadAvgResult = await ssh.execCommand("cat /proc/loadavg");
-            const loadAvgData = loadAvgResult.stdout.trim().split(' ');
-            const load_average = [
-                parseFloat(loadAvgData[0]) || 0,
-                parseFloat(loadAvgData[1]) || 0,
-                parseFloat(loadAvgData[2]) || 0
-            ];
-
-            // Get network connections count
-            const netConnectionsResult = await ssh.execCommand("ss -tuln | wc -l");
-            const network_connections = parseInt(netConnectionsResult.stdout.trim()) || 0;
-
-            // Get failed login attempts from auth.log
-            const failedLoginsResult = await ssh.execCommand(
-                "grep 'Failed password' /var/log/auth.log | tail -100 | wc -l || echo '0'"
-            );
-            const failed_login_attempts = parseInt(failedLoginsResult.stdout.trim()) || 0;
-
-            return {
-                ...basicMetrics,
-                cpu_cores,
-                memory_used_bytes,
-                memory_total_bytes,
-                disk_used_bytes,
-                disk_total_bytes,
-                hostname,
-                boot_time,
-                process_count,
-                load_average,
-                network_connections,
-                failed_login_attempts
-            };
+            return basicMetrics; // getSystemMetrics already includes enhanced metrics
         } catch (error) {
             console.error('Failed to get enhanced system metrics:', error);
-            return null;
+            return this.isDevelopmentMode() ? this.getMockSystemMetrics() : null;
         }
     },
 
     async getDockerContainers() {
         try {
-            const connected = await this.connectToVPS();
-            if (!connected) return [];
+            // Return mock data in development mode
+            if (this.isDevelopmentMode()) {
+                return [
+                    { name: 'project1', status: 'Up 2 hours', ports: '0.0.0.0:3000->3000/tcp' },
+                    { name: 'project2', status: 'Up 1 day', ports: '0.0.0.0:3001->3000/tcp' },
+                    { name: 'monitoring', status: 'Up 5 hours', ports: '0.0.0.0:4173->4173/tcp' }
+                ];
+            }
 
-            const result = await ssh.execCommand(
-                "docker ps --filter 'name=md0-' --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'"
+            const result = await this.execCommand(
+                "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'"
             );
 
             if (result.code !== 0) return [];
@@ -314,15 +298,17 @@ export const systemService = {
 
     async getDatabaseStatus() {
         try {
-            const connected = await this.connectToVPS();
-            if (!connected) return { postgresql: false, pocketbase: false };
+            // Return mock data in development mode
+            if (this.isDevelopmentMode()) {
+                return { postgresql: true, pocketbase: false };
+            }
 
             // Check PostgreSQL
-            const pgResult = await ssh.execCommand('systemctl is-active postgresql || echo "inactive"');
+            const pgResult = await this.execCommand('systemctl is-active postgresql 2>/dev/null || echo "inactive"');
             const postgresqlActive = pgResult.stdout.trim() === 'active';
 
             // Check PocketBase containers
-            const pbResult = await ssh.execCommand(
+            const pbResult = await this.execCommand(
                 "docker ps --filter 'name=pocketbase' --format '{{.Names}}' | wc -l"
             );
             const pocketbaseActive = parseInt(pbResult.stdout.trim()) > 0;
@@ -339,15 +325,17 @@ export const systemService = {
 
     async startDatabase(type: 'postgresql' | 'pocketbase'): Promise<boolean> {
         try {
-            const connected = await this.connectToVPS();
-            if (!connected) return false;
+            if (this.isDevelopmentMode()) {
+                console.log(`Mock: Starting ${type}`);
+                return true;
+            }
 
             if (type === 'postgresql') {
-                const result = await ssh.execCommand('sudo systemctl start postgresql');
+                const result = await this.execCommand('sudo systemctl start postgresql');
                 return result.code === 0;
             } else if (type === 'pocketbase') {
                 // Start PocketBase in Docker
-                const result = await ssh.execCommand(
+                const result = await this.execCommand(
                     'docker run -d --name pocketbase -p 8090:8090 -v /var/pocketbase:/pb_data spectado/pocketbase:latest'
                 );
                 return result.code === 0;
@@ -362,15 +350,17 @@ export const systemService = {
 
     async stopDatabase(type: 'postgresql' | 'pocketbase'): Promise<boolean> {
         try {
-            const connected = await this.connectToVPS();
-            if (!connected) return false;
+            if (this.isDevelopmentMode()) {
+                console.log(`Mock: Stopping ${type}`);
+                return true;
+            }
 
             if (type === 'postgresql') {
-                const result = await ssh.execCommand('sudo systemctl stop postgresql');
+                const result = await this.execCommand('sudo systemctl stop postgresql');
                 return result.code === 0;
             } else if (type === 'pocketbase') {
-                await ssh.execCommand('docker stop pocketbase || true');
-                await ssh.execCommand('docker rm pocketbase || true');
+                await this.execCommand('docker stop pocketbase || true');
+                await this.execCommand('docker rm pocketbase || true');
                 return true;
             }
 
@@ -383,10 +373,11 @@ export const systemService = {
 
     async getSystemLogs(lines = 100): Promise<string> {
         try {
-            const connected = await this.connectToVPS();
-            if (!connected) return 'Could not connect to VPS';
+            if (this.isDevelopmentMode()) {
+                return 'Mock system logs for development mode...';
+            }
 
-            const result = await ssh.execCommand(`journalctl -n ${lines} --no-pager`);
+            const result = await this.execCommand(`journalctl -n ${lines} --no-pager`);
             return result.stdout || 'No logs available';
         } catch (error) {
             console.error('Failed to get system logs:', error);
@@ -396,11 +387,16 @@ export const systemService = {
 
     async getProcesses() {
         try {
-            const connected = await this.connectToVPS();
-            if (!connected) return [];
+            if (this.isDevelopmentMode()) {
+                return [
+                    { pid: 1234, cpu: 12.5, memory: 8.3, command: 'node server.js' },
+                    { pid: 5678, cpu: 8.1, memory: 15.2, command: 'postgres' },
+                    { pid: 9012, cpu: 5.3, memory: 4.7, command: 'docker' }
+                ];
+            }
 
-            const result = await ssh.execCommand(
-                "ps aux --sort=-%cpu | head -20 | awk '{printf \"%s,%s,%s,%s\\n\", $2, $3, $4, $11}'"
+            const result = await this.execCommand(
+                "ps aux --sort=-%cpu | head -20 | awk 'NR>1 {printf \"%s,%s,%s,%s\\n\", $2, $3, $4, $11}'"
             );
 
             if (result.code !== 0) return [];
@@ -422,16 +418,18 @@ export const systemService = {
 
     async createPostgresDatabase(dbName: string, username: string, password: string): Promise<boolean> {
         try {
-            const connected = await this.connectToVPS();
-            if (!connected) return false;
+            if (this.isDevelopmentMode()) {
+                console.log(`Mock: Creating database ${dbName} for user ${username}`);
+                return true;
+            }
 
             // Create database
-            const createDbResult = await ssh.execCommand(
+            const createDbResult = await this.execCommand(
                 `sudo -u postgres createdb ${dbName}`
             );
 
             // Create user and grant privileges
-            const createUserResult = await ssh.execCommand(
+            const createUserResult = await this.execCommand(
                 `sudo -u postgres psql -c "CREATE USER ${username} WITH PASSWORD '${password}'; GRANT ALL PRIVILEGES ON DATABASE ${dbName} TO ${username};"`
             );
 
@@ -444,13 +442,14 @@ export const systemService = {
 
     async backupDatabase(dbName: string): Promise<string | null> {
         try {
-            const connected = await this.connectToVPS();
-            if (!connected) return null;
+            if (this.isDevelopmentMode()) {
+                return '/mock/backup/path.sql';
+            }
 
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
             const backupPath = `/var/backups/md0_${dbName}_${timestamp}.sql`;
 
-            const result = await ssh.execCommand(
+            const result = await this.execCommand(
                 `sudo -u postgres pg_dump ${dbName} > ${backupPath}`
             );
 
@@ -462,11 +461,6 @@ export const systemService = {
             console.error('Failed to backup database:', error);
             return null;
         }
-    },
-
-    // Helper function to determine if we're in development mode
-    isDevelopmentMode(): boolean {
-        return process.env.NODE_ENV === 'development' || !VPS_HOST || VPS_HOST === 'localhost';
     },
 
     // Helper function to get service name from port
@@ -498,27 +492,24 @@ export const systemService = {
                 return this.getMockSecurityMetrics();
             }
 
-            const connected = await this.connectToVPS();
-            if (!connected) return this.getMockSecurityMetrics();
-
             // Get firewall status
-            const firewallResult = await ssh.execCommand("sudo ufw status | grep -q 'Status: active' && echo 'true' || echo 'false'");
+            const firewallResult = await this.execCommand("sudo ufw status | grep -q 'Status: active' && echo 'true' || echo 'false'");
             const firewall_status = firewallResult.stdout.trim() === 'true';
 
             // Get fail2ban status
-            const fail2banResult = await ssh.execCommand("sudo systemctl is-active fail2ban 2>/dev/null | grep -q 'active' && echo 'true' || echo 'false'");
+            const fail2banResult = await this.execCommand("sudo systemctl is-active fail2ban 2>/dev/null | grep -q 'active' && echo 'true' || echo 'false'");
             const fail2ban_status = fail2banResult.stdout.trim() === 'true';
 
             // Get blocked IPs from fail2ban
-            const blockedIpsResult = await ssh.execCommand("sudo fail2ban-client status sshd 2>/dev/null | grep 'Banned IP list:' | cut -d: -f2 | tr -d ' ' || echo ''");
+            const blockedIpsResult = await this.execCommand("sudo fail2ban-client status sshd 2>/dev/null | grep 'Banned IP list:' | cut -d: -f2 | tr -d ' ' || echo ''");
             const blocked_ips = blockedIpsResult.stdout.trim() ? blockedIpsResult.stdout.trim().split(',') : [];
 
             // Get failed login attempts
-            const failedLoginsResult = await ssh.execCommand("grep 'Failed password' /var/log/auth.log | tail -100 | wc -l || echo '0'");
+            const failedLoginsResult = await this.execCommand("grep 'Failed password' /var/log/auth.log 2>/dev/null | tail -100 | wc -l || echo '0'");
             const failed_login_attempts = parseInt(failedLoginsResult.stdout.trim()) || 0;
 
             // Get open ports
-            const openPortsResult = await ssh.execCommand("ss -tuln | grep LISTEN | awk '{print $5}' | sed 's/.*://' | sort -nu");
+            const openPortsResult = await this.execCommand("ss -tuln | grep LISTEN | awk '{print $5}' | sed 's/.*://' | sort -nu");
             const portNumbers = openPortsResult.stdout.trim().split('\n').filter(p => p && !isNaN(parseInt(p)));
             const open_ports = portNumbers.map(port => ({
                 port: parseInt(port),
@@ -526,7 +517,7 @@ export const systemService = {
             }));
 
             // Get suspicious processes (high CPU usage)
-            const suspiciousProcessesResult = await ssh.execCommand("ps aux --sort=-%cpu | head -10 | awk 'NR>1 && $3>50 {printf \"%s,%s,%s\\n\", $2, $11, $3}'");
+            const suspiciousProcessesResult = await this.execCommand("ps aux --sort=-%cpu | head -10 | awk 'NR>1 && $3>50 {printf \"%s,%s,%s\\n\", $2, $11, $3}'");
             const suspicious_processes = suspiciousProcessesResult.stdout.trim() ? 
                 suspiciousProcessesResult.stdout.trim().split('\n').map(line => {
                     const [pid, name, cpu] = line.split(',');
@@ -538,7 +529,7 @@ export const systemService = {
                 }) : [];
 
             // Get recent logins
-            const recentLoginsResult = await ssh.execCommand("last -n 10 | head -10 | awk '$1 != \"reboot\" && $1 != \"wtmp\" && NF >= 10 {printf \"%s,%s,%s %s %s %s\\n\", $1, $3, $4, $5, $6, $7}'");
+            const recentLoginsResult = await this.execCommand("last -n 10 | head -10 | awk '$1 != \"reboot\" && $1 != \"wtmp\" && NF >= 10 {printf \"%s,%s,%s %s %s %s\\n\", $1, $3, $4, $5, $6, $7}'");
             const recent_logins = recentLoginsResult.stdout.trim() ? 
                 recentLoginsResult.stdout.trim().split('\n').map(line => {
                     const parts = line.split(',');
@@ -550,7 +541,7 @@ export const systemService = {
                 }) : [];
 
             // Get SSL certificates (basic check for common cert paths)
-            const sslCertsResult = await ssh.execCommand("find /etc/ssl/certs /etc/letsencrypt/live -name '*.pem' -o -name '*.crt' 2>/dev/null | head -5 || echo ''");
+            const sslCertsResult = await this.execCommand("find /etc/ssl/certs /etc/letsencrypt/live -name '*.pem' -o -name '*.crt' 2>/dev/null | head -5 || echo ''");
             const ssl_certificates = sslCertsResult.stdout.trim() ? 
                 sslCertsResult.stdout.trim().split('\n').map(cert => ({
                     domain: cert.split('/').pop()?.replace(/\.(pem|crt)$/, '') || 'unknown',
@@ -582,50 +573,47 @@ export const systemService = {
                 return this.getMockVPSInformation();
             }
 
-            const connected = await this.connectToVPS();
-            if (!connected) return this.getMockVPSInformation();
-
             // Get hostname
-            const hostnameResult = await ssh.execCommand("hostname");
+            const hostnameResult = await this.execCommand("hostname");
             const hostname = hostnameResult.stdout.trim();
 
             // Get public IP
-            const publicIpResult = await ssh.execCommand("curl -s ifconfig.me || curl -s icanhazip.com || echo 'Unknown'");
+            const publicIpResult = await this.execCommand("curl -s ifconfig.me || curl -s icanhazip.com || echo 'Unknown'");
             const public_ip = publicIpResult.stdout.trim();
 
             // Get private IP
-            const privateIpResult = await ssh.execCommand("hostname -I | awk '{print $1}'");
+            const privateIpResult = await this.execCommand("hostname -I | awk '{print $1}'");
             const private_ip = privateIpResult.stdout.trim();
 
             // Get OS version
-            const osVersionResult = await ssh.execCommand("lsb_release -d 2>/dev/null | cut -d: -f2 | sed 's/^\\s*//' || cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"'");
+            const osVersionResult = await this.execCommand("lsb_release -d 2>/dev/null | cut -d: -f2 | sed 's/^\\s*//' || cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"'");
             const os_version = osVersionResult.stdout.trim();
 
             // Get kernel version
-            const kernelVersionResult = await ssh.execCommand("uname -r");
+            const kernelVersionResult = await this.execCommand("uname -r");
             const kernel_version = kernelVersionResult.stdout.trim();
 
             // Get installed packages count
-            const packagesResult = await ssh.execCommand("dpkg -l | grep '^ii' | wc -l || rpm -qa | wc -l || echo '0'");
+            const packagesResult = await this.execCommand("dpkg -l | grep '^ii' | wc -l || rpm -qa | wc -l || echo '0'");
             const installed_packages = parseInt(packagesResult.stdout.trim()) || 0;
 
             // Get last update
-            const lastUpdateResult = await ssh.execCommand("stat -c %y /var/log/apt/history.log 2>/dev/null | cut -d' ' -f1 || stat -c %y /var/log/yum.log 2>/dev/null | cut -d' ' -f1 || echo 'Unknown'");
+            const lastUpdateResult = await this.execCommand("stat -c %y /var/log/apt/history.log 2>/dev/null | cut -d' ' -f1 || stat -c %y /var/log/yum.log 2>/dev/null | cut -d' ' -f1 || echo 'Unknown'");
             const last_update = lastUpdateResult.stdout.trim();
 
             // Get disk health
-            const diskHealthResult = await ssh.execCommand("smartctl -H /dev/sda 2>/dev/null | grep -o 'PASSED\\|FAILED' || echo 'healthy'");
+            const diskHealthResult = await this.execCommand("smartctl -H /dev/sda 2>/dev/null | grep -o 'PASSED\\|FAILED' || echo 'healthy'");
             const disk_health = diskHealthResult.stdout.trim().toLowerCase();
 
             // Get network interfaces
-            const networkInterfacesResult = await ssh.execCommand("ip addr show | grep -E '^[0-9]+:' | awk '{print $2}' | sed 's/:$//'");
+            const networkInterfacesResult = await this.execCommand("ip addr show | grep -E '^[0-9]+:' | awk '{print $2}' | sed 's/:$//'");
             const interfaceNames = networkInterfacesResult.stdout.trim().split('\n');
             const network_interfaces = [];
 
             for (const iface of interfaceNames) {
                 if (iface && iface !== 'lo') {
-                    const ipResult = await ssh.execCommand(`ip addr show ${iface} | grep 'inet ' | awk '{print $2}' | cut -d/ -f1`);
-                    const statusResult = await ssh.execCommand(`ip link show ${iface} | grep -o 'state [A-Z]*' | awk '{print $2}'`);
+                    const ipResult = await this.execCommand(`ip addr show ${iface} | grep 'inet ' | awk '{print $2}' | cut -d/ -f1`);
+                    const statusResult = await this.execCommand(`ip link show ${iface} | grep -o 'state [A-Z]*' | awk '{print $2}'`);
                     
                     network_interfaces.push({
                         name: iface,

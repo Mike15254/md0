@@ -1,6 +1,5 @@
+// filepath: /Users/Mikemax/dev/md0/src/lib/server/deployment.ts
 import Docker from 'dockerode';
-import { NodeSSH } from 'node-ssh';
-import { VPS_HOST, VPS_USERNAME, VPS_PASSWORD } from '$env/static/private';
 import { dbUtils } from './database.js';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -9,7 +8,6 @@ import path from 'path';
 
 const execAsync = promisify(exec);
 const docker = new Docker();
-const ssh = new NodeSSH();
 
 interface DeploymentConfig {
     projectId: number;
@@ -23,17 +21,17 @@ interface DeploymentConfig {
 }
 
 export const deploymentService = {
-    async connectToVPS() {
+    // Execute commands locally
+    async execCommand(command: string): Promise<{ stdout: string; stderr: string; code: number }> {
         try {
-            await ssh.connect({
-                host: VPS_HOST,
-                username: VPS_USERNAME,
-                password: VPS_PASSWORD
-            });
-            return true;
-        } catch (error) {
-            console.error('Failed to connect to VPS:', error);
-            return false;
+            const { stdout, stderr } = await execAsync(command);
+            return { stdout, stderr, code: 0 };
+        } catch (error: any) {
+            return { 
+                stdout: error.stdout || '', 
+                stderr: error.stderr || error.message, 
+                code: error.code || 1 
+            };
         }
     },
 
@@ -80,14 +78,11 @@ export const deploymentService = {
     },
 
     async cloneRepository(githubUrl: string, branch: string, projectPath: string) {
-        const connected = await this.connectToVPS();
-        if (!connected) throw new Error('Cannot connect to VPS');
-
         // Remove existing directory if it exists
-        await ssh.execCommand(`rm -rf ${projectPath}`);
+        await this.execCommand(`rm -rf ${projectPath}`);
         
         // Clone repository
-        const result = await ssh.execCommand(
+        const result = await this.execCommand(
             `git clone -b ${branch} ${githubUrl} ${projectPath}`
         );
         
@@ -123,23 +118,17 @@ EXPOSE ${config.port || 3000}
 CMD ${config.startCommand.split(' ')}
         `.trim();
 
-        const connected = await this.connectToVPS();
-        if (!connected) throw new Error('Cannot connect to VPS');
-
         // Check if Dockerfile exists
-        const checkResult = await ssh.execCommand(`test -f ${dockerfilePath}`);
+        const checkResult = await this.execCommand(`test -f ${dockerfilePath}`);
         
         if (checkResult.code !== 0) {
             // Create Dockerfile
-            await ssh.execCommand(`cat > ${dockerfilePath} << 'EOF'\n${dockerfileContent}\nEOF`);
+            await this.execCommand(`cat > ${dockerfilePath} << 'EOF'\n${dockerfileContent}\nEOF`);
         }
     },
 
     async buildDockerImage(projectPath: string, imageName: string) {
-        const connected = await this.connectToVPS();
-        if (!connected) throw new Error('Cannot connect to VPS');
-
-        const result = await ssh.execCommand(
+        const result = await this.execCommand(
             `cd ${projectPath} && docker build -t ${imageName} .`
         );
 
@@ -149,9 +138,6 @@ CMD ${config.startCommand.split(' ')}
     },
 
     async runContainer(imageName: string, config: DeploymentConfig): Promise<string> {
-        const connected = await this.connectToVPS();
-        if (!connected) throw new Error('Cannot connect to VPS');
-
         const containerName = `md0-${config.name.toLowerCase()}`;
         const port = config.port || 3000;
         
@@ -163,7 +149,7 @@ CMD ${config.startCommand.split(' ')}
                 .join(' ');
         }
 
-        const result = await ssh.execCommand(
+        const result = await this.execCommand(
             `docker run -d --name ${containerName} -p ${port}:${port} ${envString} --restart unless-stopped ${imageName}`
         );
 
@@ -175,20 +161,14 @@ CMD ${config.startCommand.split(' ')}
     },
 
     async stopContainer(projectName: string) {
-        const connected = await this.connectToVPS();
-        if (!connected) throw new Error('Cannot connect to VPS');
-
         const containerName = `md0-${projectName.toLowerCase()}`;
         
         // Stop and remove existing container
-        await ssh.execCommand(`docker stop ${containerName} || true`);
-        await ssh.execCommand(`docker rm ${containerName} || true`);
+        await this.execCommand(`docker stop ${containerName} || true`);
+        await this.execCommand(`docker rm ${containerName} || true`);
     },
 
     async updateNginxConfig(projectName: string, port: number) {
-        const connected = await this.connectToVPS();
-        if (!connected) throw new Error('Cannot connect to VPS');
-
         const domain = `${projectName.toLowerCase()}.yourdomain.com`;
         const configContent = `
 server {
@@ -214,37 +194,31 @@ server {
         const symlinkPath = `/etc/nginx/sites-enabled/${projectName}`;
 
         // Create nginx config
-        await ssh.execCommand(`sudo tee ${configPath} > /dev/null << 'EOF'\n${configContent}\nEOF`);
+        await this.execCommand(`sudo tee ${configPath} > /dev/null << 'EOF'\n${configContent}\nEOF`);
         
         // Enable site
-        await ssh.execCommand(`sudo ln -sf ${configPath} ${symlinkPath}`);
+        await this.execCommand(`sudo ln -sf ${configPath} ${symlinkPath}`);
         
         // Test and reload nginx
-        const testResult = await ssh.execCommand('sudo nginx -t');
+        const testResult = await this.execCommand('sudo nginx -t');
         if (testResult.code === 0) {
-            await ssh.execCommand('sudo systemctl reload nginx');
+            await this.execCommand('sudo systemctl reload nginx');
         } else {
             throw new Error(`Nginx config test failed: ${testResult.stderr}`);
         }
     },
 
     async getProjectLogs(projectName: string): Promise<string> {
-        const connected = await this.connectToVPS();
-        if (!connected) throw new Error('Cannot connect to VPS');
-
         const containerName = `md0-${projectName.toLowerCase()}`;
-        const result = await ssh.execCommand(`docker logs --tail 100 ${containerName}`);
+        const result = await this.execCommand(`docker logs --tail 100 ${containerName}`);
         
         return result.stdout + (result.stderr ? `\nErrors:\n${result.stderr}` : '');
     },
 
     async restartProject(projectName: string): Promise<boolean> {
         try {
-            const connected = await this.connectToVPS();
-            if (!connected) return false;
-
             const containerName = `md0-${projectName.toLowerCase()}`;
-            const result = await ssh.execCommand(`docker restart ${containerName}`);
+            const result = await this.execCommand(`docker restart ${containerName}`);
             
             return result.code === 0;
         } catch (error) {
@@ -255,11 +229,8 @@ server {
 
     async stopProject(projectName: string): Promise<boolean> {
         try {
-            const connected = await this.connectToVPS();
-            if (!connected) return false;
-
             const containerName = `md0-${projectName.toLowerCase()}`;
-            const result = await ssh.execCommand(`docker stop ${containerName}`);
+            const result = await this.execCommand(`docker stop ${containerName}`);
             
             return result.code === 0;
         } catch (error) {
@@ -270,9 +241,6 @@ server {
 
     async deleteProject(projectId: number, projectName: string): Promise<boolean> {
         try {
-            const connected = await this.connectToVPS();
-            if (!connected) return false;
-
             const containerName = `md0-${projectName.toLowerCase()}`;
             const imageName = `md0-${projectName.toLowerCase()}`;
             const projectPath = `/var/projects/${projectName}`;
@@ -280,18 +248,18 @@ server {
             const symlinkPath = `/etc/nginx/sites-enabled/${projectName}`;
 
             // Stop and remove container
-            await ssh.execCommand(`docker stop ${containerName} || true`);
-            await ssh.execCommand(`docker rm ${containerName} || true`);
+            await this.execCommand(`docker stop ${containerName} || true`);
+            await this.execCommand(`docker rm ${containerName} || true`);
             
             // Remove image
-            await ssh.execCommand(`docker rmi ${imageName} || true`);
+            await this.execCommand(`docker rmi ${imageName} || true`);
             
             // Remove project files
-            await ssh.execCommand(`rm -rf ${projectPath}`);
+            await this.execCommand(`rm -rf ${projectPath}`);
             
             // Remove nginx config
-            await ssh.execCommand(`sudo rm -f ${configPath} ${symlinkPath}`);
-            await ssh.execCommand('sudo systemctl reload nginx');
+            await this.execCommand(`sudo rm -f ${configPath} ${symlinkPath}`);
+            await this.execCommand('sudo systemctl reload nginx');
 
             return true;
         } catch (error) {
