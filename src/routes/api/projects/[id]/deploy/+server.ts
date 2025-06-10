@@ -36,7 +36,8 @@ export const POST: RequestHandler = async ({ params, locals }) => {
             buildCommand: project.build_command,
             startCommand: project.start_command,
             port: project.port,
-            envVars: project.environment_variables
+            envVars: project.environment_variables,
+            customDomain: project.custom_domain
         };
 
         // Deploy in background

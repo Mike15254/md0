@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
-import type { RequestHandler } from './$types';
+import type { RequestHandler } from '@sveltejs/kit';
 import { requireAuth } from '$lib/server/auth.js';
-import { query, execute } from '$lib/server/database.js';
+import { dbUtils } from '$lib/server/database.js';
 
 interface SystemSettings {
 	vps_hostname: string;
@@ -21,9 +21,12 @@ interface SystemSettings {
 	notification_webhook: string;
 }
 
-interface GitHubSettings {
-	github_token: string;
-	webhook_url: string;
+interface GitHubAppSettings {
+	app_id: string;
+	client_id: string;
+	client_secret: string;
+	private_key: string;
+	webhook_secret: string;
 	auto_deploy: boolean;
 	default_branch: string;
 	build_timeout: number;
@@ -47,14 +50,12 @@ export const GET: RequestHandler = async ({ locals }) => {
 		const user = requireAuth(locals);
 
 		// Get all settings from the database
-		const settingsResult = await query(
-			`SELECT category, key, value, type FROM settings ORDER BY category, key`
-		);
+		const settingsResult = await dbUtils.getSettings();
 
 		// Group settings by category
 		const settings = {
 			system: {} as any,
-			github: {} as any,
+			githubApp: {} as any,
 			database: {} as any
 		};
 
@@ -105,9 +106,12 @@ export const GET: RequestHandler = async ({ locals }) => {
 				backup_retention_days: 30,
 				notification_webhook: ''
 			},
-			github: {
-				github_token: '',
-				webhook_url: `${process.env.ORIGIN || 'http://localhost:5173'}/api/webhooks/github`,
+			githubApp: {
+				app_id: '',
+				client_id: '',
+				client_secret: '',
+				private_key: '',
+				webhook_secret: '',
 				auto_deploy: true,
 				default_branch: 'main',
 				build_timeout: 600
@@ -129,7 +133,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 		// Merge defaults with existing settings
 		const finalSettings = {
 			system: { ...defaultSettings.system, ...settings.system },
-			github: { ...defaultSettings.github, ...settings.github },
+			githubApp: { ...defaultSettings.githubApp, ...settings.githubApp },
 			database: { ...defaultSettings.database, ...settings.database }
 		};
 
@@ -149,7 +153,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 export const PUT: RequestHandler = async ({ request, locals }) => {
 	try {
 		const user = requireAuth(locals);
-		const { system, github, database } = await request.json();
+		const { system, githubApp, database } = await request.json();
 
 		// Prepare settings for database storage
 		const settingsToStore = [
@@ -160,9 +164,9 @@ export const PUT: RequestHandler = async ({ request, locals }) => {
 				value: String(value),
 				type: typeof value
 			})),
-			// GitHub settings
-			...Object.entries(github).map(([key, value]) => ({
-				category: 'github',
+			// GitHub App settings
+			...Object.entries(githubApp).map(([key, value]) => ({
+				category: 'githubApp',
 				key,
 				value: String(value),
 				type: typeof value
@@ -178,13 +182,7 @@ export const PUT: RequestHandler = async ({ request, locals }) => {
 
 		// Store settings in database using upsert
 		for (const setting of settingsToStore) {
-			await execute(
-				`INSERT INTO settings (category, key, value, type, updated_at) 
-				 VALUES ($1, $2, $3, $4, NOW()) 
-				 ON CONFLICT (category, key) 
-				 DO UPDATE SET value = $3, type = $4, updated_at = NOW()`,
-				[setting.category, setting.key, setting.value, setting.type]
-			);
+			await dbUtils.updateSetting(setting.category, setting.key, setting.value, setting.type);
 		}
 
 		return json({

@@ -1,15 +1,21 @@
 import { json } from '@sveltejs/kit';
-import type { RequestHandler } from './$types';
+import type { RequestHandler } from '@sveltejs/kit';
 import { dbUtils } from '$lib/server/database.js';
 import { createHmac } from 'crypto';
+import type { GitHubRepository } from '$lib/types.js';
 
 interface GitHubWebhookPayload {
-	ref: string;
-	repository: {
+	ref?: string;
+	repository?: {
 		full_name: string;
 		clone_url: string;
 		html_url: string;
 		id: number;
+		name: string;
+		owner: {
+			login: string;
+		};
+		private: boolean;
 	};
 	head_commit?: {
 		id: string;
@@ -24,7 +30,40 @@ interface GitHubWebhookPayload {
 		name: string;
 		email: string;
 	};
-	action?: string; // For PR events
+	action?: string;
+	installation?: {
+		id: number;
+		account: {
+			login: string;
+			id: number;
+			type: string;
+		};
+	};
+	installation_id?: number;
+	repositories?: Array<{
+		id: number;
+		name: string;
+		full_name: string;
+		private: boolean;
+		html_url: string;
+		clone_url: string;
+	}>;
+	repositories_added?: Array<{
+		id: number;
+		name: string;
+		full_name: string;
+		private: boolean;
+		html_url: string;
+		clone_url: string;
+	}>;
+	repositories_removed?: Array<{
+		id: number;
+		name: string;
+		full_name: string;
+		private: boolean;
+		html_url: string;
+		clone_url: string;
+	}>;
 	pull_request?: {
 		number: number;
 		title: string;
@@ -52,19 +91,22 @@ export const POST: RequestHandler = async ({ request }) => {
 		const body = await request.text();
 		const signature = request.headers.get('x-hub-signature-256');
 		const githubEvent = request.headers.get('x-github-event') || 'unknown';
+		const githubDelivery = request.headers.get('x-github-delivery');
 
-		// Get webhook secret from settings
+		console.log(`GitHub webhook received: ${githubEvent} (${githubDelivery})`);
+
+		// Get GitHub App webhook secret from settings
 		const settings = await dbUtils.getSettings();
-		const webhookSecret = settings.find(s => s.category === 'system' && s.key === 'webhook_secret')?.value;
+		const githubAppWebhookSecret = settings.find(s => s.category === 'githubApp' && s.key === 'webhook_secret')?.value;
 		
-		if (!webhookSecret) {
-			console.error('Webhook secret not configured');
+		if (!githubAppWebhookSecret) {
+			console.error('GitHub App webhook secret not configured');
 			return json({ error: 'Webhook not configured' }, { status: 500 });
 		}
 
 		// Verify webhook signature
 		if (signature) {
-			const expectedSignature = 'sha256=' + createHmac('sha256', webhookSecret).update(body).digest('hex');
+			const expectedSignature = 'sha256=' + createHmac('sha256', githubAppWebhookSecret).update(body).digest('hex');
 			if (signature !== expectedSignature) {
 				console.error('Invalid webhook signature');
 				return json({ error: 'Invalid signature' }, { status: 401 });
@@ -78,8 +120,131 @@ export const POST: RequestHandler = async ({ request }) => {
 			return await handleGitHubAppEvent(githubEvent, payload);
 		}
 
+		// Handle repository push events for auto-deployment
+		if (githubEvent === 'push' && payload.repository) {
+			return await handlePushEvent(payload);
+		}
+
+		// Handle pull request events (optional - for preview deployments)
+		if (githubEvent === 'pull_request' && payload.repository) {
+			return await handlePullRequestEvent(payload);
+		}
+
+		// Log and acknowledge other events
+		console.log(`GitHub App event '${githubEvent}' received but not processed`);
+		return json({ message: `Event type '${githubEvent}' acknowledged` });
+
+	} catch (error) {
+		console.error('GitHub webhook error:', error);
+		return json({ 
+			error: 'Webhook processing failed',
+			details: error instanceof Error ? error.message : 'Unknown error'
+		}, { status: 500 });
+	}
+};
+
+async function handleGitHubAppEvent(eventType: string, payload: GitHubWebhookPayload) {
+	try {
+		console.log(`Processing GitHub App event: ${eventType}`);
+		
+		const { githubAppService } = await import('$lib/server/github-app.js');
+		
+		if (eventType === 'installation') {
+			const installation = payload.installation;
+			if (!installation) {
+				throw new Error('Installation data missing from payload');
+			}
+
+			const installationData = {
+				installation_id: installation.id,
+				account_id: installation.account.id,
+				account_login: installation.account.login,
+				account_type: installation.account.type,
+				setup_action: payload.action
+			};
+
+			if (payload.action === 'created') {
+				// Store installation
+				await dbUtils.createGitHubAppInstallation(installationData);
+				
+				// Get and store repositories
+				const repositories = await githubAppService.getInstallationRepositories(installation.id);
+				for (const repo of repositories) {
+					await githubAppService.storeRepositoryInfo(installation.id, repo);
+				}
+				
+				console.log(`GitHub App installed for ${installation.account.login} with ${repositories.length} repositories`);
+			} else if (payload.action === 'deleted') {
+				// Remove installation
+				await dbUtils.deleteGitHubAppInstallation(installation.id);
+				console.log(`GitHub App uninstalled for ${installation.account.login}`);
+			}
+			
+			return json({ 
+				message: `Installation ${payload.action} processed`,
+				installation_id: installation.id,
+				account: installation.account.login
+			});
+		}
+		
+		if (eventType === 'installation_repositories') {
+			const installation = payload.installation;
+			if (!installation) {
+				throw new Error('Installation data missing from payload');
+			}
+
+			if (payload.action === 'added' && payload.repositories_added) {
+				// Store new repositories
+				for (const repo of payload.repositories_added) {
+					await githubAppService.storeRepositoryInfo(installation.id, {
+						id: repo.id,
+						name: repo.name,
+						full_name: repo.full_name,
+						private: repo.private,
+						html_url: repo.html_url,
+						clone_url: repo.clone_url,
+						default_branch: (repo as any).default_branch || 'main',
+						language: (repo as any).language || null,
+						description: (repo as any).description || null
+					});
+				}
+				console.log(`Added ${payload.repositories_added.length} repositories to installation ${installation.id}`);
+			}
+			
+			if (payload.action === 'removed' && payload.repositories_removed) {
+				// Remove repositories (we could implement this if needed)
+				console.log(`Removed ${payload.repositories_removed.length} repositories from installation ${installation.id}`);
+			}
+			
+			return json({ 
+				message: `Installation repositories ${payload.action} processed`,
+				installation_id: installation.id,
+				repositories_count: payload.repositories_added?.length || payload.repositories_removed?.length || 0
+			});
+		}
+		
+		return json({ message: 'GitHub App event processed' });
+		
+	} catch (error) {
+		console.error('GitHub App event handling error:', error);
+		return json({ 
+			error: 'GitHub App event processing failed',
+			details: error instanceof Error ? error.message : 'Unknown error'
+		}, { status: 500 });
+	}
+}
+
+async function handleRepositoryEvent(eventType: string, payload: GitHubWebhookPayload) {
+	try {
+		if (!payload.repository) {
+			throw new Error('Repository data missing from payload');
+		}
+
 		// Find project by GitHub URL
-		const projects = await dbUtils.getProjectsByGitHubUrl([payload.repository.clone_url, payload.repository.html_url]);
+		const projects = await dbUtils.getProjectsByGitHubUrl([
+			payload.repository.clone_url, 
+			payload.repository.html_url
+		]);
 
 		if (projects.length === 0) {
 			console.log('No project found for repository:', payload.repository.full_name);
@@ -91,16 +256,32 @@ export const POST: RequestHandler = async ({ request }) => {
 		// Log the webhook event
 		const eventData = {
 			project_id: project.id,
-			event_type: githubEvent,
+			event_type: eventType,
 			payload: payload,
 			repository_name: payload.repository.full_name,
-			processed: false
+			processed: false,
+			commit_sha: undefined as string | undefined,
+			commit_message: undefined as string | undefined,
+			author_name: undefined as string | undefined,
+			author_email: undefined as string | undefined,
+			source_branch: undefined as string | undefined
 		};
+
+		if (payload.head_commit) {
+			eventData.commit_sha = payload.head_commit.id;
+			eventData.commit_message = payload.head_commit.message;
+			eventData.author_name = payload.head_commit.author.name;
+			eventData.author_email = payload.head_commit.author.email;
+		}
+
+		if (payload.ref) {
+			eventData.source_branch = payload.ref.replace('refs/heads/', '');
+		}
 
 		const webhookEvent = await dbUtils.logWebhookEvent(eventData);
 
 		// Handle different event types
-		switch (githubEvent) {
+		switch (eventType) {
 			case 'push':
 				return await handlePushEvent(project, payload, webhookEvent.id);
 			case 'pull_request':
@@ -109,52 +290,21 @@ export const POST: RequestHandler = async ({ request }) => {
 				return await handleReleaseEvent(project, payload, webhookEvent.id);
 			default:
 				await dbUtils.markWebhookEventProcessed(webhookEvent.id, false);
-				return json({ message: `Event type '${githubEvent}' not handled` });
+				return json({ message: `Event type '${eventType}' not handled` });
 		}
 
 	} catch (error) {
-		console.error('GitHub webhook error:', error);
-		return json({ 
-			error: 'Webhook processing failed',
-			details: error instanceof Error ? error.message : 'Unknown error'
-		}, { status: 500 });
-	}
-};
-
-async function handleGitHubAppEvent(eventType: string, payload: any) {
-	try {
-		const { githubAppService } = await import('$lib/server/github-app.js');
-		
-		if (eventType === 'installation') {
-			const installationId = payload.installation.id;
-			await githubAppService.handleWebhook(payload, installationId);
-			
-			return json({ 
-				message: `Installation ${payload.action} processed`,
-				installation_id: installationId
-			});
-		}
-		
-		if (eventType === 'installation_repositories') {
-			const installationId = payload.installation.id;
-			await githubAppService.handleWebhook(payload, installationId);
-			
-			return json({ 
-				message: `Installation repositories ${payload.action} processed`,
-				installation_id: installationId
-			});
-		}
-		
-		return json({ message: 'GitHub App event processed' });
-		
-	} catch (error) {
-		console.error('GitHub App event handling error:', error);
-		return json({ error: 'GitHub App event processing failed' }, { status: 500 });
+		console.error('Repository event handling error:', error);
+		throw error;
 	}
 }
 
 async function handlePushEvent(project: any, payload: GitHubWebhookPayload, webhookEventId: number) {
 	try {
+		if (!payload.ref || !payload.repository) {
+			throw new Error('Push event missing required data');
+		}
+
 		// Check if this is a push to the configured branch
 		const pushedBranch = payload.ref.replace('refs/heads/', '');
 		
@@ -232,6 +382,10 @@ async function handleReleaseEvent(project: any, payload: GitHubWebhookPayload, w
 
 async function deployProject(project: any, payload: GitHubWebhookPayload) {
 	try {
+		if (!payload.repository) {
+			throw new Error('Repository data missing for deployment');
+		}
+
 		// Update project status to building
 		await dbUtils.updateProjectStatus(project.id, 'building');
 
@@ -242,7 +396,7 @@ async function deployProject(project: any, payload: GitHubWebhookPayload) {
 		// Import deployment service
 		const { deploymentService } = await import('$lib/server/deployment.js');
 		
-		// Get GitHub token if needed
+		// Get GitHub token and installation ID
 		let githubToken;
 		let installationId;
 		
@@ -267,7 +421,7 @@ async function deployProject(project: any, payload: GitHubWebhookPayload) {
 		// Fallback to stored GitHub credential
 		if (!githubToken && project.github_token_id) {
 			const credential = await dbUtils.getGitHubCredential(project.github_token_id);
-			githubToken = credential?.access_token;
+			githubToken = credential?.token;
 		}
 
 		// Create deployment config from project data

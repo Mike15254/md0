@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
-import type { RequestHandler } from './$types';
-import { dbUtils } from '$lib/server/database';
+import type { RequestHandler } from '@sveltejs/kit';
+import { dbUtils } from '$lib/server/database.js';
 
 export const GET: RequestHandler = async ({ locals }) => {
 	if (!locals.user) {
@@ -8,7 +8,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 	}
 
 	try {
-		const databases = await dbUtils.getDatabaseInstances(locals.user.id.toString());
+		const databases = await dbUtils.getDatabaseInstances(Number(locals.user.id));
 		return json(databases);
 	} catch (error) {
 		console.error('Error fetching databases:', error);
@@ -31,7 +31,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		// Create database instance
 		const databaseId = await dbUtils.createDatabaseInstance({
-			created_by: locals.user.id,
+			created_by: Number(locals.user.id),
 			name: data.name,
 			type: data.type,
 			port: data.port || 5432,

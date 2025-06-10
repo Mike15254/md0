@@ -3,7 +3,7 @@ import { deploymentService } from '$lib/server/deployment.js';
 import { dbUtils } from '$lib/server/database.js';
 import type { RequestHandler } from './$types.js';
 
-export const GET: RequestHandler = async ({ params, locals }) => {
+export const POST: RequestHandler = async ({ params, locals }) => {
     try {
         if (!locals.user) {
             return json({ error: 'Authentication required' }, { status: 401 });
@@ -30,28 +30,34 @@ export const GET: RequestHandler = async ({ params, locals }) => {
             return json({ error: 'Permission denied' }, { status: 403 });
         }
 
-        // Get deployment logs
-        const logs = await dbUtils.getDeploymentLogs(project.id.toString());
-        
-        // Get runtime logs from container
-        let runtimeLogs = '';
         try {
-            if (project.status === 'running') {
-                runtimeLogs = await deploymentService.getProjectLogs(project.name);
+            const result = await deploymentService.stopProject(project.id);
+            
+            if (result.success) {
+                // Update project status
+                await dbUtils.updateProjectStatus(project.id, 'stopped');
+                
+                return json({
+                    success: true,
+                    message: 'Project stopped successfully',
+                    status: 'stopped'
+                });
+            } else {
+                return json({
+                    success: false,
+                    error: result.error || 'Failed to stop project'
+                }, { status: 500 });
             }
         } catch (error) {
-            console.error('Error getting runtime logs:', error);
+            console.error('Project stop error:', error);
+            
+            return json({
+                success: false,
+                error: error instanceof Error ? error.message : 'Failed to stop project'
+            }, { status: 500 });
         }
-
-        return json({
-            success: true,
-            data: {
-                deployment_logs: logs,
-                runtime_logs: runtimeLogs
-            }
-        });
     } catch (error) {
-        console.error('Get logs error:', error);
+        console.error('Stop project error:', error);
         return json({ error: 'Internal server error' }, { status: 500 });
     }
 };

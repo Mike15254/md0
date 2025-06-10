@@ -9,20 +9,23 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
             return json({ error: 'Authentication required' }, { status: 401 });
         }
 
-        const projectId = parseInt(params.id);
-        if (isNaN(projectId)) {
-            return json({ error: 'Invalid project ID' }, { status: 400 });
-        }
-
         const { action } = await request.json();
         
         if (!['start', 'stop', 'restart'].includes(action)) {
             return json({ error: 'Invalid action. Must be start, stop, or restart' }, { status: 400 });
         }
 
-        // Get project details
-        const projects = await dbUtils.getProjects();
-        const project = projects.find(p => p.id === projectId);
+        // Try to get project by name first, then by ID for backwards compatibility
+        let project = await dbUtils.findProjectByName(decodeURIComponent(params.id));
+        
+        if (!project) {
+            // Fallback: try to get by ID if the param looks like a number
+            const projectId = parseInt(params.id);
+            if (!isNaN(projectId)) {
+                const projects = await dbUtils.getProjects();
+                project = projects.find(p => p.id === projectId);
+            }
+        }
 
         if (!project) {
             return json({ error: 'Project not found' }, { status: 404 });
@@ -47,7 +50,8 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
                     buildCommand: project.build_command,
                     startCommand: project.start_command,
                     port: project.port,
-                    envVars: project.environment_variables
+                    envVars: project.environment_variables,
+                    customDomain: project.custom_domain
                 };
                 
                 deploymentService.deployProject(deploymentConfig).catch(error => {
