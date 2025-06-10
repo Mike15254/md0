@@ -36,14 +36,17 @@
 		AlertCircle,
 		CheckCircle,
 		XCircle,
-		Loader2
+		Loader2,
+		Info,
+		Webhook,
+		Bug
 	} from 'lucide-svelte';
-	import { getStatusColor, formatRelativeTime } from '$lib/utils.js';
+	import { getStatusColor, formatRelativeTime, getLogLevelColor } from '$lib/utils.js';
 	import type { Project, DeploymentLog } from '$lib/types';
 
 	export let data: PageData;
 
-	let project: Project = data.project as Project;
+	let project: Project = data.project as unknown as Project;
 	let deploymentLogs: DeploymentLog[] = data.logs as unknown as DeploymentLog[];
 	let activeTab = 'overview';
 	let loading = false;
@@ -61,6 +64,18 @@
 	// Logs state
 	let logsAutoRefresh = false;
 	let logsInterval: NodeJS.Timeout;
+
+	// Project settings state
+	let projectSettings = {
+		name: project.name,
+		description: project.description || '',
+		build_command: project.build_command || '',
+		start_command: project.start_command || '',
+		port: project.port || 3000,
+		custom_domain: project.custom_domain || '',
+		runtime: project.runtime || 'node',
+		auto_deploy: project.auto_deploy !== false
+	};
 
 	onMount(() => {
 		// Start auto-refresh for logs if enabled
@@ -206,18 +221,36 @@
 		}
 	}
 
-	function getLogLevelColor(level: string) {
-		switch (level) {
-			case 'success':
-				return 'text-green-600 dark:text-green-400';
-			case 'error':
-				return 'text-red-600 dark:text-red-400';
-			case 'warning':
-				return 'text-yellow-600 dark:text-yellow-400';
-			default:
-				return 'text-muted-foreground';
+	async function saveProjectSettings() {
+		loading = true;
+		error = '';
+		success = '';
+
+		try {
+			const response = await fetch(`/api/projects/${encodeURIComponent(project.name)}`, {
+				method: 'PATCH',
+				headers: {
+					'Content-Type': 'application/json'
+				},
+				body: JSON.stringify(projectSettings)
+			});
+
+			if (response.ok) {
+				success = 'Project settings saved successfully';
+				// Update the project object
+				Object.assign(project, projectSettings);
+			} else {
+				const result = await response.json();
+				error = result.error || 'Failed to save project settings';
+			}
+		} catch (err) {
+			error = 'Failed to save project settings';
+			console.error(err);
+		} finally {
+			loading = false;
 		}
 	}
+
 
 	function getLogLevelIcon(level: string) {
 		switch (level) {
@@ -227,6 +260,10 @@
 				return XCircle;
 			case 'warning':
 				return AlertCircle;
+			case 'info':
+				return Activity;
+			case 'build':
+				return Settings;
 			default:
 				return Activity;
 		}
@@ -249,13 +286,12 @@
 	<title>{project.name} - MD0</title>
 </svelte:head>
 
-<div class="flex flex-1 flex-col gap-4 p-4 pt-0">
+<div class="flex flex-1 flex-col gap-4 p-4 pt-8">
 	<!-- Page Header -->
 	<div class="flex items-center justify-between">
 		<div class="flex items-center gap-4">
 			<Button variant="ghost" size="sm" onclick={() => goto('/projects')}>
 				<ArrowLeft class="h-4 w-4 mr-2" />
-				Back to Projects
 			</Button>
 			<div>
 				<div class="flex items-center gap-3">
@@ -265,7 +301,10 @@
 					</Badge>
 				</div>
 				<p class="text-muted-foreground">
-					{project.description || 'No description provided'}
+					{#if project.latest_commit}
+						Latest commit: {project.latest_commit.message}
+					
+					{/if}
 				</p>
 			</div>
 		</div>
@@ -336,14 +375,34 @@
 								class="flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:underline"
 							>
 								<GitBranch class="h-3 w-3" />
-								{project.repository_url?.split('/').slice(-2).join('/') || 'No repository'}
+								{project.repository_name || project.repository_url?.split('/').slice(-2).join('/') || 'No repository'}
 								<ExternalLink class="h-3 w-3" />
 							</a>
 						</div>
 						<div class="flex justify-between">
 							<span class="text-muted-foreground">Branch:</span>
-							<span>{project.branch}</span>
+							<span>{project.github_branch || 'main'}</span>
 						</div>
+						{#if project.latest_commit}
+							<div class="flex justify-between items-start">
+								<span class="text-muted-foreground">Latest Commit:</span>
+								<div class="text-right max-w-xs">
+									<a
+										href={project.latest_commit.url}
+										target="_blank"
+										class="text-blue-600 dark:text-blue-400 hover:underline text-sm"
+									>
+										{project.latest_commit.sha.substring(0, 7)}
+									</a>
+									<p class="text-xs text-muted-foreground mt-1">
+										{project.latest_commit.message.substring(0, 50)}{project.latest_commit.message.length > 50 ? '...' : ''}
+									</p>
+									<p class="text-xs text-muted-foreground">
+										by {project.latest_commit.author}
+									</p>
+								</div>
+							</div>
+						{/if}
 						<div class="flex justify-between">
 							<span class="text-muted-foreground">Runtime:</span>
 							<span class="capitalize">{project.runtime}</span>
@@ -352,15 +411,15 @@
 							<span class="text-muted-foreground">Port:</span>
 							<span>{project.port}</span>
 						</div>
-						{#if project.domain}
+						{#if project.custom_domain}
 							<div class="flex justify-between">
 								<span class="text-muted-foreground">Domain:</span>
 								<a
-									href="https://{project.domain}"
+									href="https://{project.custom_domain}"
 									target="_blank"
 									class="flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:underline"
 								>
-									{project.domain}
+									{project.custom_domain}
 									<ExternalLink class="h-3 w-3" />
 								</a>
 							</div>
@@ -382,12 +441,18 @@
 						<div class="flex justify-between">
 							<span class="text-muted-foreground">Last Deployed:</span>
 							<span
-								>{project.last_deployed_at ? formatDate(project.last_deployed_at) : 'Never'}</span
+								>{project.updated_at ? formatRelativeTime(project.updated_at) : 'Never'}</span
 							>
 						</div>
+						{#if project.repository_language}
+							<div class="flex justify-between">
+								<span class="text-muted-foreground">Language:</span>
+								<span>{project.repository_language}</span>
+							</div>
+						{/if}
 						<div class="flex justify-between">
 							<span class="text-muted-foreground">Created:</span>
-							<span>{formatDate(project.created_at)}</span>
+							<span>{formatRelativeTime(project.created_at)}</span>
 						</div>
 					</CardContent>
 				</Card>
@@ -436,19 +501,30 @@
 					<div class="max-h-96 space-y-2 overflow-y-auto">
 						{#each deploymentLogs as log}
 							{@const LogIcon = getLogLevelIcon(log.level ?? 'info')}
-							<div class="flex gap-3 border-l-2 border-l-gray-200 dark:border-l-gray-700 p-2 text-sm">
-								<LogIcon class="mt-0.5 h-4 w-4 {getLogLevelColor(log.level ?? 'info')}" />
-								<div class="flex-1">
-									<div class="flex items-start justify-between">
-										<p class="font-mono whitespace-pre-wrap">{log.message}</p>
-										<span class="text-muted-foreground ml-2 text-xs">
+							{@const logLevel = log.level ?? 'info'}
+							<div class="flex gap-3 border-l-2 p-3 text-sm rounded-r-md transition-colors
+								{logLevel === 'success' ? 'border-l-green-500 bg-green-50/50 dark:bg-green-950/20' :
+								 logLevel === 'error' ? 'border-l-red-500 bg-red-50/50 dark:bg-red-950/20' :
+								 logLevel === 'warning' ? 'border-l-yellow-500 bg-yellow-50/50 dark:bg-yellow-950/20' :
+								 logLevel === 'info' ? 'border-l-blue-500 bg-blue-50/50 dark:bg-blue-950/20' :
+								 logLevel === 'build' ? 'border-l-purple-500 bg-purple-50/50 dark:bg-purple-950/20' :
+								 'border-l-gray-300 bg-gray-50/50 dark:bg-gray-900/20'}">
+								<LogIcon class="mt-0.5 h-4 w-4 flex-shrink-0 {getLogLevelColor(logLevel)}" />
+								<div class="flex-1 min-w-0">
+									<div class="flex items-start justify-between gap-2">
+										<p class="font-mono text-sm whitespace-pre-wrap break-words flex-1">{log.message}</p>
+										<span class="text-muted-foreground text-xs whitespace-nowrap">
 											{formatDate(log.created_at)}
 										</span>
 									</div>
 								</div>
 							</div>
 						{:else}
-							<p class="text-muted-foreground text-center py-8">No logs available</p>
+							<div class="text-center py-12">
+								<Activity class="h-8 w-8 text-muted-foreground mx-auto mb-3" />
+								<p class="text-muted-foreground text-sm">No deployment logs available</p>
+								<p class="text-muted-foreground text-xs mt-1">Logs will appear here during deployment</p>
+							</div>
 						{/each}
 					</div>
 				</CardContent>
@@ -497,6 +573,145 @@
 
 		<!-- Settings Tab -->
 		<TabsContent value="settings" class="space-y-4">
+			<!-- General Settings -->
+			<Card>
+				<CardHeader>
+					<CardTitle>General Settings</CardTitle>
+					<CardDescription>Basic project configuration</CardDescription>
+				</CardHeader>
+				<CardContent class="space-y-4">
+					<div class="grid gap-4 md:grid-cols-2">
+						<div class="space-y-2">
+							<Label for="project-name">Project Name</Label>
+							<Input 
+								id="project-name"
+								bind:value={projectSettings.name} 
+								placeholder="Enter project name" 
+							/>
+						</div>
+						<div class="space-y-2">
+							<Label for="runtime">Runtime</Label>
+							<select 
+								id="runtime"
+								bind:value={projectSettings.runtime}
+								class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
+							>
+								<option value="node">Node.js</option>
+								<option value="python">Python</option>
+								<option value="static">Static</option>
+							</select>
+						</div>
+					</div>
+					<div class="space-y-2">
+						<Label for="description">Description</Label>
+						<Textarea 
+							id="description"
+							bind:value={projectSettings.description} 
+							placeholder="Enter project description" 
+						/>
+					</div>
+				</CardContent>
+			</Card>
+
+			<!-- Build & Deployment Settings -->
+			<Card>
+				<CardHeader>
+					<CardTitle>Build & Deployment</CardTitle>
+					<CardDescription>Configure how your project is built and deployed</CardDescription>
+				</CardHeader>
+				<CardContent class="space-y-4">
+					<div class="space-y-2">
+						<Label for="build-command">Build Command</Label>
+						<Input 
+							id="build-command"
+							bind:value={projectSettings.build_command} 
+							placeholder="e.g., bun install && bun run build" 
+						/>
+						<p class="text-sm text-muted-foreground">
+							Command to build your application. Leave empty for no build step.
+						</p>
+					</div>
+					<div class="space-y-2">
+						<Label for="start-command">Start Command</Label>
+						<Input 
+							id="start-command"
+							bind:value={projectSettings.start_command} 
+							placeholder="e.g., bun start or bun ./build/index.js" 
+						/>
+						<p class="text-sm text-muted-foreground">
+							Command to start your application after building.
+						</p>
+					</div>
+					<div class="grid gap-4 md:grid-cols-2">
+						<div class="space-y-2">
+							<Label for="port">Port</Label>
+							<Input 
+								id="port"
+								type="number"
+								bind:value={projectSettings.port} 
+								placeholder="3000" 
+							/>
+						</div>
+						<div class="flex items-center space-x-2">
+							<input 
+								type="checkbox" 
+								id="auto-deploy"
+								bind:checked={projectSettings.auto_deploy}
+								class="rounded border-gray-300"
+							/>
+							<Label for="auto-deploy">Auto-deploy on push</Label>
+						</div>
+					</div>
+				</CardContent>
+			</Card>
+
+			<!-- Domain Settings -->
+			<Card>
+				<CardHeader>
+					<CardTitle>Domain & SSL</CardTitle>
+					<CardDescription>Configure custom domain and SSL settings</CardDescription>
+				</CardHeader>
+				<CardContent class="space-y-4">
+					<div class="space-y-2">
+						<Label for="custom-domain">Custom Domain</Label>
+						<Input 
+							id="custom-domain"
+							bind:value={projectSettings.custom_domain} 
+							placeholder="e.g., myapp.example.com" 
+						/>
+						<p class="text-sm text-muted-foreground">
+							Your custom domain. Make sure to point your DNS to our servers.
+						</p>
+					</div>
+					{#if projectSettings.custom_domain}
+						<div class="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/20 p-4">
+							<h4 class="font-semibold text-blue-800 dark:text-blue-400 mb-2">DNS Configuration</h4>
+							<p class="text-sm text-blue-600 dark:text-blue-300 mb-2">
+								Point your domain to our servers by adding these DNS records:
+							</p>
+							<div class="font-mono text-xs bg-white dark:bg-gray-900 p-2 rounded border">
+								<div>Type: A</div>
+								<div>Name: @ (or your subdomain)</div>
+								<div>Value: {data.settings?.system?.vps_ip || 'YOUR_VPS_IP'}</div>
+							</div>
+						</div>
+					{/if}
+				</CardContent>
+			</Card>
+
+			<!-- Save Settings -->
+			<div class="flex justify-end">
+				<Button onclick={saveProjectSettings} disabled={loading}>
+					{#if loading}
+						<Loader2 class="mr-2 h-4 w-4 animate-spin" />
+					{:else}
+						<Save class="mr-2 h-4 w-4" />
+					{/if}
+					Save Settings
+				</Button>
+			</div>
+
+			<!-- Danger Zone -->
 			<Card>
 				<CardHeader>
 					<CardTitle>Danger Zone</CardTitle>
