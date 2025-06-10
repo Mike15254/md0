@@ -1,5 +1,4 @@
-import Root from "./toggle.svelte";
-export {
+import Root, {
 	toggleVariants,
 	type ToggleSize,
 	type ToggleVariant,
@@ -8,6 +7,10 @@ export {
 
 export {
 	Root,
+	toggleVariants,
+	type ToggleSize,
+	type ToggleVariant,
+	type ToggleVariants,
 	//
 	Root as Toggle,
 };

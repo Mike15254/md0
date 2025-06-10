@@ -36,7 +36,7 @@
 	import { useSidebar } from "./context.svelte.js";
 
 	let {
-		ref = $bindable(null),
+		ref = $bindable<HTMLButtonElement | null>(null),
 		class: className,
 		children,
 		child,
@@ -46,7 +46,7 @@
 		tooltipContent,
 		tooltipContentProps,
 		...restProps
-	}: WithElementRef<HTMLAttributes<HTMLButtonElement>, HTMLButtonElement> & {
+	}: WithElementRef<HTMLAttributes<HTMLButtonElement>, HTMLButtonElement | null> & {
 		isActive?: boolean;
 		variant?: SidebarMenuButtonVariant;
 		size?: SidebarMenuButtonSize;

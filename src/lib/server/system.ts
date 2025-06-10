@@ -143,11 +143,10 @@ export const systemService = {
                     name: 'md0-monitoring',
                     description: 'MD0 VPS Monitoring Dashboard - System monitoring and security dashboard for the VPS',
                     github_url: 'https://github.com/mikemax/md0-monitoring',
-                    domain: `http://${hostname}:4173`, // Preview mode port
-                    status: 'running',
+                    custom_domain: `http://${hostname}:4173`, // Preview mode port
+                    runtime: 'node',
                     tech_stack: ['SvelteKit', 'TypeScript', 'PostgreSQL', 'Docker'],
-                    created_at: new Date(),
-                    updated_at: new Date()
+                    created_by: 1 // Assuming user ID 1 is the system or admin user
                 };
 
                 await dbUtils.createProject(projectData);

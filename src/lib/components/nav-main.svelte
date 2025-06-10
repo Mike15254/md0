@@ -83,7 +83,7 @@
 				</Collapsible.Root>
 			{:else}
 				<Sidebar.MenuItem>
-					<Sidebar.MenuButton asChild>
+					<Sidebar.MenuButton tooltipContent={item.title}>
 						{#snippet child({ props }: { props: Record<string, any> })}
 							<a href={item.url} {...props} data-active={itemActive}>
 								{#if item.icon}
