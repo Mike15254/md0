@@ -8,25 +8,49 @@
 	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Separator } from '$lib/components/ui/separator';
 	import { Badge } from '$lib/components/ui/badge';
-	import { AlertCircle, ArrowLeft, Plus, X } from 'lucide-svelte';
+	import { Switch } from '$lib/components/ui/switch';
+	import { AlertCircle, ArrowLeft, Plus, X, Github, Key, Globe } from 'lucide-svelte';
 	import { Alert, AlertDescription } from '$lib/components/ui/alert';
+	import { onMount } from 'svelte';
 
 	let formData = {
 		name: '',
+		description: '',
 		repository_url: '',
 		branch: 'main',
 		build_command: '',
 		start_command: '',
 		port: 3000,
-		domain: '',
-		description: '',
+		custom_domain: '',
 		runtime: 'node',
+		auto_deploy: true,
 		environment_variables: [] as { key: string; value: string }[]
 	};
 
 	let loading = false;
 	let error = '';
 	let validationErrors: Record<string, string> = {};
+	let githubRepositories: any[] = [];
+	let loadingRepositories = false;
+
+	onMount(() => {
+		loadGitHubRepositories();
+	});
+
+	async function loadGitHubRepositories() {
+		loadingRepositories = true;
+		try {
+			const response = await fetch('/api/github/app/repositories');
+			if (response.ok) {
+				const result = await response.json();
+				githubRepositories = result.data?.repositories || [];
+			}
+		} catch (err) {
+			console.error('Failed to load GitHub repositories:', err);
+		} finally {
+			loadingRepositories = false;
+		}
+	}
 
 	function addEnvironmentVariable() {
 		formData.environment_variables = [...formData.environment_variables, { key: '', value: '' }];
@@ -57,8 +81,8 @@
 			validationErrors.port = 'Port must be between 1 and 65535';
 		}
 
-		if (formData.domain && !/^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.[a-zA-Z]{2,}$/.test(formData.domain)) {
-			validationErrors.domain = 'Please enter a valid domain name';
+		if (formData.custom_domain && !/^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.[a-zA-Z]{2,}$/.test(formData.custom_domain)) {
+			validationErrors.custom_domain = 'Please enter a valid domain name';
 		}
 
 		return Object.keys(validationErrors).length === 0;
@@ -82,8 +106,8 @@
 			});
 
 			if (response.ok) {
-				const project = await response.json();
-				goto(`/projects/${project.id}`);
+				const result = await response.json();
+				goto(`/projects/${result.data.id}`);
 			} else {
 				const result = await response.json();
 				error = result.error || 'Failed to create project';
@@ -99,9 +123,10 @@
 	function handleRepositoryUrlChange() {
 		// Auto-fill project name from repository URL
 		if (formData.repository_url && !formData.name) {
-			const match = formData.repository_url.match(/github\.com\/[^\/]+\/([^\/]+)/);
-			if (match) {
-				formData.name = match[1].replace(/\.git$/, '');
+			// Find the selected repository and extract the name
+			const selectedRepo = githubRepositories.find(r => r.clone_url === formData.repository_url);
+			if (selectedRepo) {
+				formData.name = selectedRepo.name;
 			}
 		}
 	}
@@ -122,6 +147,11 @@
 				if (!formData.start_command) formData.start_command = 'serve -s build';
 				break;
 		}
+	}
+
+	// React to repository selection changes
+	$: if (formData.repository_url) {
+		handleRepositoryUrlChange();
 	}
 
 	// React to runtime changes
@@ -188,17 +218,17 @@
 						{/if}
 					</div>
 					<div class="space-y-2">
-						<Label for="domain" class="text-sm font-medium">Custom Domain</Label>
+						<Label for="custom_domain" class="text-sm font-medium">Custom Domain</Label>
 						<Input
-							id="domain"
-							bind:value={formData.domain}
+							id="custom_domain"
+							bind:value={formData.custom_domain}
 							placeholder="example.com"
-							class={validationErrors.domain ? 'border-destructive focus-visible:ring-destructive' : ''}
+							class={validationErrors.custom_domain ? 'border-destructive focus-visible:ring-destructive' : ''}
 						/>
-						{#if validationErrors.domain}
+						{#if validationErrors.custom_domain}
 							<p class="text-sm text-destructive mt-1 flex items-center gap-1">
 								<AlertCircle class="h-3 w-3" />
-								{validationErrors.domain}
+								{validationErrors.custom_domain}
 							</p>
 						{/if}
 					</div>
@@ -223,21 +253,56 @@
 				<CardTitle class="flex items-center gap-2">
 					<div class="h-2 w-2 rounded-full bg-green-500"></div>
 					Repository
-				</CardTitle>
-				<CardDescription>
-					Connect your GitHub repository
-				</CardDescription>
-			</CardHeader>
-			<CardContent class="space-y-4">
+				</CardTitle>			<CardDescription>
+				Select a repository from your GitHub App installations
+			</CardDescription>
+		</CardHeader>
+		<CardContent class="space-y-4">
+			{#if loadingRepositories}
+				<div class="flex items-center justify-center py-8">
+					<div class="flex items-center gap-2 text-muted-foreground">
+						<div class="animate-spin rounded-full h-4 w-4 border-b-2 border-current"></div>
+						Loading GitHub repositories...
+					</div>
+				</div>
+			{:else if githubRepositories.length === 0}
+				<div class="text-center py-8">
+					<div class="mx-auto w-16 h-16 bg-muted rounded-full flex items-center justify-center mb-4">
+						<Github class="w-8 h-8 text-muted-foreground" />
+					</div>
+					<h3 class="text-lg font-medium mb-2">No GitHub App Installation Found</h3>
+					<p class="text-muted-foreground text-sm mb-4 max-w-md mx-auto">
+						Install the GitHub App to access your repositories for deployment.
+					</p>
+					<Button onclick={() => window.open('https://github.com/apps/mdo-0/installations/new', '_blank')}>
+						<Github class="w-4 h-4 mr-2" />
+						Install GitHub App
+					</Button>
+				</div>
+			{:else}
 				<div class="space-y-2">
-					<Label for="repository_url" class="text-sm font-medium">GitHub Repository URL *</Label>
-					<Input
-						id="repository_url"
-						bind:value={formData.repository_url}
-						oninput={handleRepositoryUrlChange}
-						placeholder="https://github.com/username/repository"
-						class={validationErrors.repository_url ? 'border-destructive focus-visible:ring-destructive' : ''}
-					/>
+					<Label for="repository_select" class="text-sm font-medium">GitHub Repository *</Label>
+					<Select type="single" bind:value={formData.repository_url}>
+						<SelectTrigger class={validationErrors.repository_url ? 'border-destructive focus-visible:ring-destructive' : ''}>
+							{formData.repository_url ? 
+								githubRepositories.find(r => r.clone_url === formData.repository_url)?.full_name || 'Select repository'
+								: 'Select a repository'
+							}
+						</SelectTrigger>
+						<SelectContent>
+							{#each githubRepositories as repo}
+								<SelectItem value={repo.clone_url}>
+									<div class="flex items-center gap-2">
+										<Github class="w-4 h-4" />
+										<span>{repo.full_name}</span>
+										{#if repo.private}
+											<Badge variant="secondary" class="text-xs">Private</Badge>
+										{/if}
+									</div>
+								</SelectItem>
+							{/each}
+						</SelectContent>
+					</Select>
 					{#if validationErrors.repository_url}
 						<p class="text-sm text-destructive mt-1 flex items-center gap-1">
 							<AlertCircle class="h-3 w-3" />
@@ -255,6 +320,7 @@
 					/>
 					<p class="text-xs text-muted-foreground">The branch to deploy from your repository</p>
 				</div>
+			{/if}
 			</CardContent>
 		</Card>
 
