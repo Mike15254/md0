@@ -22,7 +22,8 @@
 			loading = true;
 			const response = await fetch('/api/projects');
 			if (response.ok) {
-				projects = await response.json();
+				const result = await response.json();
+				projects = result.success ? result.data : [];
 			} else {
 				error = 'Failed to load projects';
 			}
@@ -34,9 +35,9 @@
 		}
 	}
 
-	async function toggleProject(projectId: string, action: 'start' | 'stop' | 'restart') {
+	async function toggleProject(projectName: string, action: 'start' | 'stop' | 'restart') {
 		try {
-			const response = await fetch(`/api/projects/${projectId}/${action}`, {
+			const response = await fetch(`/api/projects/${projectName}/${action}`, {
 				method: 'POST'
 			});
 			
@@ -136,9 +137,19 @@
 								</CardTitle>
 								<CardDescription class="flex items-center gap-1 mt-1">
 									<GitBranch class="h-3 w-3 flex-shrink-0" />
-									<span class="truncate">
-										{project.repository_url?.split('/').slice(-2).join('/') || 'No repository'}
-									</span>
+									{#if project.repository_name}
+										<a 
+											href={project.repository_url} 
+											target="_blank" 
+											class="text-primary hover:underline truncate transition-colors"
+										>
+											{project.repository_name}
+										</a>
+									{:else}
+										<span class="truncate text-muted-foreground">
+											No repository linked
+										</span>
+									{/if}
 								</CardDescription>
 							</div>
 							<Badge variant="outline" class={getStatusColor(project.status)}>
@@ -151,18 +162,26 @@
 							<div class="flex items-center gap-2">
 								<Clock class="h-3 w-3 flex-shrink-0" />
 								<span class="truncate">
-									Last deploy: {project.last_deployed_at ? formatDate(project.last_deployed_at) : 'Never'}
+									Last deploy: {project.updated_at ? formatDate(project.updated_at) : 'Never'}
 								</span>
 							</div>
-							{#if project.domain}
+							{#if project.repository_language}
+								<div class="flex items-center gap-2">
+									<Activity class="h-3 w-3 flex-shrink-0" />
+									<span class="truncate">
+										{project.repository_language}
+									</span>
+								</div>
+							{/if}
+							{#if project.custom_domain}
 								<div class="flex items-center gap-2">
 									<Activity class="h-3 w-3 flex-shrink-0" />
 									<a 
-										href="https://{project.domain}" 
+										href="https://{project.custom_domain}" 
 										target="_blank" 
 										class="text-primary hover:underline truncate transition-colors"
 									>
-										{project.domain}
+										{project.custom_domain}
 									</a>
 								</div>
 							{/if}
@@ -173,7 +192,7 @@
 								<Button 
 									size="sm" 
 									variant="outline" 
-									onclick={() => toggleProject(project.id.toString(), 'stop')}
+									onclick={() => toggleProject(project.name, 'stop')}
 									class="gap-1"
 								>
 									<Square class="h-3 w-3" />
@@ -182,7 +201,7 @@
 								<Button 
 									size="sm" 
 									variant="outline" 
-									onclick={() => toggleProject(project.id.toString(), 'restart')}
+									onclick={() => toggleProject(project.name, 'restart')}
 									class="gap-1"
 								>
 									<RotateCcw class="h-3 w-3" />
@@ -192,7 +211,7 @@
 								<Button 
 									size="sm" 
 									variant="outline" 
-									onclick={() => toggleProject(project.id.toString(), 'start')}
+									onclick={() => toggleProject(project.name, 'start')}
 									class="gap-1"
 								>
 									<Play class="h-3 w-3" />
@@ -202,7 +221,7 @@
 							<Button 
 								size="sm" 
 								variant="outline" 
-								onclick={() => goto(`/projects/${project.id}`)}
+								onclick={() => goto(`/projects/${encodeURIComponent(project.name)}`)}
 								class="gap-1 flex-1 sm:flex-none"
 							>
 								<Settings class="h-3 w-3" />
