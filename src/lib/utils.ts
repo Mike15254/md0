@@ -12,7 +12,7 @@ export type WithoutChildren<T> = T extends { children?: any } ? Omit<T, "childre
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type WithoutChildrenOrChild<T> = WithoutChildren<WithoutChild<T>>;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type WithElementRef<T> = T & { ref?: any };
+export type WithElementRef<T, E = any> = T & { ref?: E | null };
 
 // MD0 Deployment Dashboard Utilities
 
@@ -76,6 +76,55 @@ export function getStatusColor(status: string): string {
         default:
             return 'text-gray-700 bg-gray-50 border-gray-200 dark:text-gray-300 dark:bg-gray-800 dark:border-gray-600';
     }
+}
+
+export function getLogLevelColor(level: string): string {
+    switch (level?.toLowerCase()) {
+        case 'success':
+            return 'text-green-600 dark:text-green-400';
+        case 'error':
+            return 'text-red-600 dark:text-red-400';
+        case 'warning':
+            return 'text-yellow-600 dark:text-yellow-400';
+        case 'info':
+            return 'text-blue-600 dark:text-blue-400';
+        case 'build':
+            return 'text-purple-600 dark:text-purple-400';
+        case 'webhook':
+            return 'text-indigo-600 dark:text-indigo-400';
+        case 'debug':
+            return 'text-gray-600 dark:text-gray-400';
+        default:
+            return 'text-muted-foreground';
+    }
+}
+
+export function getLogLevelIcon(level: string) {
+    // This function returns the icon class name that should be imported in the component
+    switch (level?.toLowerCase()) {
+        case 'success':
+            return 'CheckCircle';
+        case 'error':
+            return 'XCircle';
+        case 'warning':
+            return 'AlertCircle';
+        case 'info':
+            return 'Info';
+        case 'build':
+            return 'Settings';
+        case 'webhook':
+            return 'Webhook';
+        case 'debug':
+            return 'Bug';
+        default:
+            return 'Activity';
+    }
+}
+
+export function getProgressColor(value: number): string {
+    if (value > 90) return 'bg-red-500 dark:bg-red-600';
+    if (value > 70) return 'bg-yellow-500 dark:bg-yellow-600';
+    return 'bg-green-500 dark:bg-green-600';
 }
 
 export function getStatusIcon(status: string): string {

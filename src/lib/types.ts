@@ -30,12 +30,24 @@ export interface Project {
     deployment_type: 'docker' | 'pm2';
     runtime?: string;
     domain?: string;
+    custom_domain?: string;
     description?: string;
     created_by: number;
     created_by_username?: string;
     created_at: Date;
     updated_at: Date;
     last_deployed_at?: Date;
+    auto_deploy?: boolean;
+    tech_stack?: string[];
+    repository_name?: string;
+    repository_language?: string;
+    repository_description?: string;
+    latest_commit?: {
+        sha: string;
+        message: string;
+        author: string;
+        url: string;
+    };
 }
 
 export interface CreateProjectRequest {
@@ -52,8 +64,8 @@ export interface CreateProjectRequest {
 export interface DeploymentLog {
     id: number;
     project_id: number;
-    log_type: 'build' | 'runtime' | 'error';
-    level?: 'info' | 'warn' | 'error' | 'debug';
+    log_type: 'build' | 'runtime' | 'error' | 'info' | 'webhook';
+    level?: 'info' | 'success' | 'warning' | 'error' | 'debug';
     message: string;
     created_at: Date;
 }
@@ -192,6 +204,19 @@ export interface GitHubWebhookPayload {
             email: string;
         };
     }>;
+}
+
+// GitHub repository types
+export interface GitHubRepository {
+    id: number;
+    name: string;
+    full_name: string;
+    private: boolean;
+    html_url: string;
+    clone_url: string;
+    default_branch: string;
+    language: string | null;
+    description: string | null;
 }
 
 // Environment variable types
