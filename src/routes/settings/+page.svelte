@@ -17,6 +17,7 @@
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Separator } from '$lib/components/ui/separator/index.js';
 	import { Alert, AlertDescription } from '$lib/components/ui/alert/index.js';
+	import GitHubAppStatus from '$lib/components/GitHubAppStatus.svelte';
 	import {
 		Settings,
 		Server,
@@ -43,7 +44,6 @@
 		pm2_enabled: boolean;
 		auto_ssl: boolean;
 		monitoring_enabled: boolean;
-		webhook_secret: string;
 		max_projects: number;
 		disk_quota_gb: number;
 		backup_enabled: boolean;
@@ -51,9 +51,12 @@
 		notification_webhook: string;
 	}
 
-	interface GitHubSettings {
-		github_token: string;
-		webhook_url: string;
+	interface GitHubAppSettings {
+		app_id: string;
+		client_id: string;
+		client_secret: string;
+		private_key: string;
+		webhook_secret: string;
 		auto_deploy: boolean;
 		default_branch: string;
 		build_timeout: number;
@@ -82,7 +85,6 @@
 		pm2_enabled: true,
 		auto_ssl: true,
 		monitoring_enabled: true,
-		webhook_secret: '',
 		max_projects: 50,
 		disk_quota_gb: 100,
 		backup_enabled: true,
@@ -90,9 +92,12 @@
 		notification_webhook: ''
 	});
 
-	let githubSettings: GitHubSettings = $state({
-		github_token: '',
-		webhook_url: '',
+	let githubAppSettings: GitHubAppSettings = $state({
+		app_id: '',
+		client_id: '',
+		client_secret: '',
+		private_key: '',
+		webhook_secret: '',
 		auto_deploy: true,
 		default_branch: 'main',
 		build_timeout: 600
@@ -136,7 +141,7 @@
 				const result = await response.json();
 				if (result.success) {
 					systemSettings = { ...systemSettings, ...result.data.system };
-					githubSettings = { ...githubSettings, ...result.data.github };
+					githubAppSettings = { ...githubAppSettings, ...result.data.githubApp };
 					databaseSettings = { ...databaseSettings, ...result.data.database };
 				} else {
 					error = result.error || 'Failed to load settings';
@@ -165,7 +170,7 @@
 				},
 				body: JSON.stringify({
 					system: systemSettings,
-					github: githubSettings,
+					githubApp: githubAppSettings,
 					database: databaseSettings
 				})
 			});
@@ -201,9 +206,9 @@
 		}
 	}
 
-	async function generateWebhookSecret() {
+	async function generateGitHubAppWebhookSecret() {
 		const secret = crypto.randomUUID().replace(/-/g, '');
-		systemSettings.webhook_secret = secret;
+		githubAppSettings.webhook_secret = secret;
 	}
 </script>
 
@@ -257,7 +262,7 @@
 				</TabsTrigger>
 				<TabsTrigger value="github">
 					<GitBranch class="mr-2 h-4 w-4" />
-					GitHub
+					GitHub App
 				</TabsTrigger>
 				<TabsTrigger value="database">
 					<Database class="mr-2 h-4 w-4" />
@@ -406,26 +411,11 @@
 					<CardHeader>
 						<CardTitle class="flex items-center">
 							<Shield class="mr-2 h-5 w-5" />
-							Webhooks & Security
+							Notifications
 						</CardTitle>
-						<CardDescription>Configure webhook security and notification settings</CardDescription>
+						<CardDescription>Configure notification settings</CardDescription>
 					</CardHeader>
 					<CardContent class="space-y-4">
-						<div class="space-y-2">
-							<Label for="webhook_secret">Webhook Secret</Label>
-							<div class="flex space-x-2">
-								<Input
-									id="webhook_secret"
-									bind:value={systemSettings.webhook_secret}
-									placeholder="Generated webhook secret"
-									type="password"
-								/>
-								<Button variant="outline" onclick={generateWebhookSecret}>
-									<Key class="h-4 w-4" />
-								</Button>
-							</div>
-						</div>
-
 						<div class="space-y-2">
 							<Label for="notification_webhook">Notification Webhook URL</Label>
 							<Input
@@ -433,75 +423,28 @@
 								bind:value={systemSettings.notification_webhook}
 								placeholder="https://discord.com/api/webhooks/..."
 							/>
+							<p class="text-xs text-muted-foreground">
+								Optional webhook URL for deployment notifications (Discord, Slack, etc.)
+							</p>
 						</div>
 					</CardContent>
 				</Card>
 			</TabsContent>
 
-			<!-- GitHub Settings -->
+			<!-- GitHub App Settings -->
 			<TabsContent value="github" class="space-y-6">
+
+				<!-- GitHub App Status -->
 				<Card>
 					<CardHeader>
 						<CardTitle class="flex items-center">
-							<GitBranch class="mr-2 h-5 w-5" />
-							GitHub Integration
+							<Shield class="mr-2 h-5 w-5" />
+							GitHub App Status
 						</CardTitle>
-						<CardDescription>Configure GitHub API access and deployment settings</CardDescription>
+						<CardDescription>View GitHub App installation status and manage repositories</CardDescription>
 					</CardHeader>
 					<CardContent class="space-y-4">
-						<div class="space-y-2">
-							<Label for="github_token">GitHub Personal Access Token</Label>
-							<Input
-								id="github_token"
-								bind:value={githubSettings.github_token}
-								placeholder="ghp_..."
-								type="password"
-							/>
-							<p class="text-muted-foreground text-sm">Token needs repo access permissions</p>
-						</div>
-
-						<div class="space-y-2">
-							<Label for="webhook_url">Webhook URL</Label>
-							<Input
-								id="webhook_url"
-								bind:value={githubSettings.webhook_url}
-								placeholder="https://yourdomain.com/api/webhooks/github"
-								readonly
-							/>
-							<p class="text-muted-foreground text-sm">
-								Add this URL to your GitHub repository webhooks
-							</p>
-						</div>
-
-						<div class="flex items-center justify-between">
-							<div class="space-y-0.5">
-								<Label>Auto Deploy</Label>
-								<p class="text-muted-foreground text-sm">
-									Automatically deploy on push to main branch
-								</p>
-							</div>
-							<Switch bind:checked={githubSettings.auto_deploy} />
-						</div>
-
-						<div class="grid grid-cols-2 gap-4">
-							<div class="space-y-2">
-								<Label for="default_branch">Default Branch</Label>
-								<Input
-									id="default_branch"
-									bind:value={githubSettings.default_branch}
-									placeholder="main"
-								/>
-							</div>
-							<div class="space-y-2">
-								<Label for="build_timeout">Build Timeout (seconds)</Label>
-								<Input
-									id="build_timeout"
-									type="number"
-									bind:value={githubSettings.build_timeout}
-									placeholder="600"
-								/>
-							</div>
-						</div>
+						<GitHubAppStatus />
 					</CardContent>
 				</Card>
 			</TabsContent>
