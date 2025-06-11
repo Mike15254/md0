@@ -2,53 +2,220 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button/index.js';
-	import {
-		Card,
-		CardContent,
-		CardDescription,
-		CardHeader,
-		CardTitle
-	} from '$lib/components/ui/card/index.js';
+	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '$lib/components/ui/card/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
-	import { Switch } from '$lib/components/ui/switch/index.js';
 	import { Tabs, TabsContent, TabsList, TabsTrigger } from '$lib/components/ui/tabs/index.js';
-	import { Badge } from '$lib/components/ui/badge/index.js';
-	import { Separator } from '$lib/components/ui/separator/index.js';
 	import { Alert, AlertDescription } from '$lib/components/ui/alert/index.js';
-	import GitHubAppStatus from '$lib/components/GitHubAppStatus.svelte';
-	import {
-		Settings,
-		Server,
-		Database,
-		Key,
-		Globe,
-		Shield,
-		Save,
-		RefreshCw,
-		AlertTriangle,
-		CheckCircle,
-		GitBranch
-	} from 'lucide-svelte';
+	import { AlertTriangle, CheckCircle, RefreshCw, Save, Settings, Server } from 'lucide-svelte';
 
 	let { data } = $props();
 
-	interface SystemSettings {
-		vps_hostname: string;
-		vps_ip: string;
+	interface GitHubAppSettings {
+		app_id: string;
+		client_id: string;
+		client_secret: string;
+		private_key: string;
+		webhook_secret: string;
+	}
+
+	interface VPSSettings {
+		hostname: string;
+		ip: string;
 		ssh_port: number;
 		ssh_key_path: string;
-		nginx_config_path: string;
-		docker_enabled: boolean;
-		pm2_enabled: boolean;
-		auto_ssl: boolean;
-		monitoring_enabled: boolean;
-		max_projects: number;
-		disk_quota_gb: number;
-		backup_enabled: boolean;
-		backup_retention_days: number;
-		notification_webhook: string;
+	}
+
+	let githubSettings: GitHubAppSettings = $state({
+		app_id: '',
+		client_id: '',
+		client_secret: '',
+		private_key: '',
+		webhook_secret: ''
+	});
+
+	let vpsSettings: VPSSettings = $state({
+		hostname: '',
+		ip: '',
+		ssh_port: 22,
+		ssh_key_path: ''
+	});
+
+	let loading = $state(true);
+	let saving = $state(false);
+	let testing = $state(false);
+	let error = $state('');
+	let success = $state('');
+	let githubStatus = $state<'unknown' | 'connected' | 'error'>('unknown');
+	let vpsStatus = $state<'unknown' | 'connected' | 'error'>('unknown');
+
+	// Redirect to login if not authenticated
+	$effect(() => {
+		if (!data.user) {
+			goto('/login');
+		}
+	});
+
+	onMount(() => {
+		loadSettings();
+	});
+
+	async function loadSettings() {
+		try {
+			loading = true;
+			error = '';
+			
+			const response = await fetch('/api/new/settings');
+			if (response.ok) {
+				const result = await response.json();
+				if (result.success) {
+					// Load GitHub settings
+					if (result.data.github) {
+						githubSettings = { ...githubSettings, ...result.data.github };
+					}
+					// Load VPS settings
+					if (result.data.vps) {
+						vpsSettings = { ...vpsSettings, ...result.data.vps };
+					}
+					
+					// Check GitHub status
+					await checkGitHubStatus();
+				} else {
+					error = result.error || 'Failed to load settings';
+				}
+			} else {
+				error = 'Failed to fetch settings';
+			}
+		} catch (err) {
+			console.error('Load settings error:', err);
+			error = 'Failed to load settings';
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function saveGitHubSettings() {
+		try {
+			saving = true;
+			error = '';
+			success = '';
+
+			// Save each setting individually
+			const settings = [
+				{ category: 'github', key: 'app_id', value: githubSettings.app_id },
+				{ category: 'github', key: 'client_id', value: githubSettings.client_id },
+				{ category: 'github', key: 'client_secret', value: githubSettings.client_secret },
+				{ category: 'github', key: 'private_key', value: githubSettings.private_key },
+				{ category: 'github', key: 'webhook_secret', value: githubSettings.webhook_secret }
+			];
+
+			for (const setting of settings) {
+				const response = await fetch('/api/new/settings', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(setting)
+				});
+
+				if (!response.ok) {
+					const result = await response.json();
+					throw new Error(result.error || 'Failed to save setting');
+				}
+			}
+
+			success = 'GitHub settings saved successfully';
+			await checkGitHubStatus();
+		} catch (err) {
+			console.error('Save GitHub settings error:', err);
+			error = err instanceof Error ? err.message : 'Failed to save GitHub settings';
+		} finally {
+			saving = false;
+		}
+	}
+
+	async function saveVPSSettings() {
+		try {
+			saving = true;
+			error = '';
+			success = '';
+
+			const settings = [
+				{ category: 'vps', key: 'hostname', value: vpsSettings.hostname },
+				{ category: 'vps', key: 'ip', value: vpsSettings.ip },
+				{ category: 'vps', key: 'ssh_port', value: vpsSettings.ssh_port.toString() },
+				{ category: 'vps', key: 'ssh_key_path', value: vpsSettings.ssh_key_path }
+			];
+
+			for (const setting of settings) {
+				const response = await fetch('/api/new/settings', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(setting)
+				});
+
+				if (!response.ok) {
+					const result = await response.json();
+					throw new Error(result.error || 'Failed to save setting');
+				}
+			}
+
+			success = 'VPS settings saved successfully';
+		} catch (err) {
+			console.error('Save VPS settings error:', err);
+			error = err instanceof Error ? err.message : 'Failed to save VPS settings';
+		} finally {
+			saving = false;
+		}
+	}
+
+	async function checkGitHubStatus() {
+		try {
+			const response = await fetch('/api/github/app/status');
+			if (response.ok) {
+				const result = await response.json();
+				githubStatus = result.success ? 'connected' : 'error';
+			} else {
+				githubStatus = 'error';
+			}
+		} catch (err) {
+			console.error('GitHub status check error:', err);
+			githubStatus = 'error';
+		}
+	}
+
+	async function testGitHubConnection() {
+		try {
+			testing = true;
+			error = '';
+			success = '';
+
+			const response = await fetch('/api/github/app/sync', {
+				method: 'POST'
+			});
+
+			if (response.ok) {
+				const result = await response.json();
+				if (result.success) {
+					success = 'GitHub connection successful';
+					githubStatus = 'connected';
+				} else {
+					error = result.error || 'GitHub connection failed';
+					githubStatus = 'error';
+				}
+			} else {
+				const result = await response.json();
+				error = result.error || 'GitHub connection test failed';
+				githubStatus = 'error';
+			}
+		} catch (err) {
+			console.error('Test GitHub connection error:', err);
+			error = 'GitHub connection test failed';
+			githubStatus = 'error';
+		} finally {
+			testing = false;
+		}
+	}
+</script>
 	}
 
 	interface GitHubAppSettings {
