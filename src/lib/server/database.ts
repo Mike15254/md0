@@ -62,7 +62,8 @@ export const dbUtils = {
     async getProjects(userId?: number) {
         if (userId) {
             const result = await db`
-                SELECT p.*, u.username as created_by_username
+                SELECT p.*, u.username as created_by_username,
+                       p.branch as github_branch
                 FROM projects p
                 LEFT JOIN users u ON p.created_by = u.id
                 WHERE p.created_by = ${userId}
@@ -71,7 +72,8 @@ export const dbUtils = {
             return result;
         } else {
             const result = await db`
-                SELECT p.*, u.username as created_by_username
+                SELECT p.*, u.username as created_by_username,
+                       p.branch as github_branch
                 FROM projects p
                 LEFT JOIN users u ON p.created_by = u.id
                 ORDER BY p.created_at DESC
@@ -113,7 +115,8 @@ export const dbUtils = {
 
     async getProject(projectId: string) {
         const result = await db`
-            SELECT p.*, u.username as created_by_username
+            SELECT p.*, u.username as created_by_username,
+                   p.branch as github_branch
             FROM projects p
             LEFT JOIN users u ON p.created_by = u.id
             WHERE p.id = ${projectId}
@@ -162,38 +165,59 @@ export const dbUtils = {
         status: string;
         container_id: string;
         config: Record<string, any>;
+        memory_limit: number;
+        storage_limit: number;
+        backup_enabled: boolean;
     }>) {
-        if (updates.status) {
-            const result = await db`
-                UPDATE database_instances 
-                SET status = ${updates.status}, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ${instanceId}
-                RETURNING *
-            `;
-            return result[0];
+        const setParts = [];
+        const values = [];
+
+        if (updates.status !== undefined) {
+            setParts.push(`status = $${setParts.length + 1}`);
+            values.push(updates.status);
         }
         
-        if (updates.container_id) {
-            const result = await db`
-                UPDATE database_instances 
-                SET container_id = ${updates.container_id}, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ${instanceId}
-                RETURNING *
-            `;
-            return result[0];
+        if (updates.container_id !== undefined) {
+            setParts.push(`container_id = $${setParts.length + 1}`);
+            values.push(updates.container_id);
         }
 
-        if (updates.config) {
-            const result = await db`
-                UPDATE database_instances 
-                SET config = ${JSON.stringify(updates.config)}, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ${instanceId}
-                RETURNING *
-            `;
-            return result[0];
+        if (updates.config !== undefined) {
+            setParts.push(`config = $${setParts.length + 1}`);
+            values.push(JSON.stringify(updates.config));
         }
 
-        return null;
+        if (updates.memory_limit !== undefined) {
+            setParts.push(`memory_limit = $${setParts.length + 1}`);
+            values.push(updates.memory_limit);
+        }
+
+        if (updates.storage_limit !== undefined) {
+            setParts.push(`storage_limit = $${setParts.length + 1}`);
+            values.push(updates.storage_limit);
+        }
+
+        if (updates.backup_enabled !== undefined) {
+            setParts.push(`backup_enabled = $${setParts.length + 1}`);
+            values.push(updates.backup_enabled);
+        }
+
+        if (setParts.length === 0) {
+            return null;
+        }
+
+        setParts.push(`updated_at = CURRENT_TIMESTAMP`);
+        values.push(instanceId);
+
+        const query = `
+            UPDATE database_instances 
+            SET ${setParts.join(', ')}
+            WHERE id = $${values.length}
+            RETURNING *
+        `;
+
+        const result = await db.unsafe(query, values);
+        return result[0];
     },
 
     async deleteDatabaseInstance(instanceId: string) {
@@ -230,7 +254,7 @@ export const dbUtils = {
     // Project management functions
     async findProjectByName(name: string) {
         const result = await db`
-            SELECT * FROM projects WHERE name = ${name}
+            SELECT *, branch as github_branch FROM projects WHERE name = ${name}
         `;
         return result[0] || null;
     },
@@ -254,7 +278,7 @@ export const dbUtils = {
         const webhookSecret = randomUUID().replace(/-/g, '');
         const result = await db`
             INSERT INTO projects (
-                name, description, github_url, github_branch, github_repository_id,
+                name, description, github_url, branch, github_repository_id,
                 build_command, start_command, port, custom_domain, environment_variables,
                 runtime, tech_stack, auto_deploy, webhook_secret, created_by
             )
@@ -367,14 +391,29 @@ export const dbUtils = {
         runtime: string;
         auto_deploy: boolean;
         environment_variables: any;
+        github_branch: string;
     }>) {
-        const result = await db`
-            UPDATE projects 
-            SET ${db(updates)}, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ${projectId}
-            RETURNING *
-        `;
-        return result[0];
+        // Map github_branch to branch for database
+        const dbUpdates = { ...updates };
+        if (dbUpdates.github_branch) {
+            dbUpdates.branch = dbUpdates.github_branch;
+            delete dbUpdates.github_branch;
+        }
+        
+        try {
+            const result = await db`
+                UPDATE projects 
+                SET ${db(dbUpdates)}, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ${projectId}
+                RETURNING *, branch as github_branch
+            `;
+            return result[0];
+        } catch (error: any) {
+            if (error.code === '23505' && error.constraint_name === 'projects_name_created_by_key') {
+                throw new Error('Project name already exists');
+            }
+            throw error;
+        }
     },
 
     // Webhook Events
@@ -697,7 +736,7 @@ export const dbUtils = {
     async getDomains(projectId: number) {
         const result = await db`
             SELECT * FROM domains
-            WHERE project_id = ${projectId} AND is_active = true
+            WHERE project_id = ${projectId}
             ORDER BY created_at DESC
         `;
         return result;
@@ -706,7 +745,7 @@ export const dbUtils = {
     async getDomain(domainId: number) {
         const result = await db`
             SELECT * FROM domains
-            WHERE id = ${domainId} AND is_active = true
+            WHERE id = ${domainId}
         `;
         return result[0] || null;
     },
@@ -730,8 +769,7 @@ export const dbUtils = {
 
     async deleteDomain(domainId: number) {
         await db`
-            UPDATE domains 
-            SET is_active = false, updated_at = CURRENT_TIMESTAMP
+            DELETE FROM domains 
             WHERE id = ${domainId}
         `;
     },
@@ -748,5 +786,163 @@ export const dbUtils = {
             RETURNING *
         `;
         return result[0];
+    },
+
+    // Authentication helpers
+    async findUserByUsername(username: string) {
+        const result = await db`
+            SELECT id, username, password_hash, email, is_admin, github_installations,
+                   failed_login_attempts, locked_until, created_at, last_login
+            FROM users 
+            WHERE username = ${username}
+        `;
+        return result[0] || null;
+    },
+
+    async findUserByEmail(email: string) {
+        const result = await db`
+            SELECT id, username, email, is_admin, github_installations, created_at, last_login
+            FROM users 
+            WHERE email = ${email}
+        `;
+        return result[0] || null;
+    },
+
+    async incrementFailedLoginAttempts(userId: number) {
+        await db`
+            UPDATE users 
+            SET 
+                failed_login_attempts = failed_login_attempts + 1,
+                locked_until = CASE 
+                    WHEN failed_login_attempts >= 4 THEN CURRENT_TIMESTAMP + INTERVAL '30 minutes'
+                    ELSE locked_until
+                END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ${userId}
+        `;
+    },
+
+    async resetFailedLoginAttempts(userId: number) {
+        await db`
+            UPDATE users 
+            SET 
+                failed_login_attempts = 0,
+                locked_until = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ${userId}
+        `;
+    },
+
+    async updateLastLogin(userId: number) {
+        await db`
+            UPDATE users 
+            SET 
+                last_login = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ${userId}
+        `;
+    },
+
+    // Additional missing methods
+    async getGitHubRepository(repositoryId: number) {
+        const result = await db`
+            SELECT * FROM github_repositories 
+            WHERE id = ${repositoryId}
+        `;
+        return result[0] || null;
+    },
+
+    async getAllWebhookEvents(limit: number = 50) {
+        const result = await db`
+            SELECT * FROM webhook_events 
+            ORDER BY created_at DESC 
+            LIMIT ${limit}
+        `;
+        return result;
+    },
+
+    async getDomainsByProject(projectId: number) {
+        const result = await db`
+            SELECT d.*, p.name as project_name 
+            FROM domains d
+            LEFT JOIN projects p ON d.project_id = p.id
+            WHERE d.project_id = ${projectId}
+            ORDER BY d.created_at DESC
+        `;
+        return result;
+    },
+
+    async getAllDomains() {
+        const result = await db`
+            SELECT d.*, p.name as project_name, p.created_by as project_created_by
+            FROM domains d
+            LEFT JOIN projects p ON d.project_id = p.id
+            ORDER BY d.created_at DESC
+        `;
+        return result;
+    },
+
+    async updateDomainStatus(domainId: number, status: string) {
+        await db`
+            UPDATE domains 
+            SET status = ${status}, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ${domainId}
+        `;
+    },
+
+    async addSystemMetric(metrics: {
+        cpu_usage: number;
+        memory_usage: number;
+        disk_usage: number;
+        network_in: number;
+        network_out: number;
+        uptime: number;
+    }) {
+        await db`
+            INSERT INTO vps_metrics (cpu_usage, memory_usage, disk_usage, network_in, network_out, uptime)
+            VALUES (${metrics.cpu_usage}, ${metrics.memory_usage}, ${metrics.disk_usage}, 
+                    ${metrics.network_in}, ${metrics.network_out}, ${metrics.uptime})
+        `;
+    },
+
+    async addWebhookEvent(event: {
+        project_id: number;
+        event_type: string;
+        event_action?: string;
+        source_branch?: string;
+        target_branch?: string;
+        commit_sha?: string;
+        commit_message?: string;
+        author_name?: string;
+        author_email?: string;
+        payload: Record<string, any>;
+        processed?: boolean;
+        deployment_triggered?: boolean;
+    }) {
+        const result = await db`
+            INSERT INTO webhook_events (
+                project_id, event_type, event_action, source_branch, target_branch,
+                commit_sha, commit_message, author_name, author_email, payload, 
+                processed, deployment_triggered
+            )
+            VALUES (
+                ${event.project_id}, ${event.event_type}, ${event.event_action || null},
+                ${event.source_branch || null}, ${event.target_branch || null},
+                ${event.commit_sha || null}, ${event.commit_message || null},
+                ${event.author_name || null}, ${event.author_email || null},
+                ${JSON.stringify(event.payload)}, ${event.processed || false}, 
+                ${event.deployment_triggered || false}
+            )
+            RETURNING *
+        `;
+        return result[0];
+    },
+
+    async linkUserToInstallation(userId: number, installationId: number) {
+        await db`
+            UPDATE users 
+            SET github_installations = array_append(github_installations, ${installationId})
+            WHERE id = ${userId}
+        `;
     }
 };
