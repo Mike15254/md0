@@ -1,4 +1,4 @@
-import { lucia } from '$lib/server/auth.js';
+import { lucia } from '$lib/service/auth.js';
 import type { Handle } from '@sveltejs/kit';
 
 export const handle: Handle = async ({ event, resolve }) => {

@@ -1,6 +1,7 @@
 // See https://svelte.dev/docs/kit/types#app.d.ts
 // for information about these interfaces
 import type { User, Session } from 'lucia';
+import type { ClientUser } from '$lib/types.js';
 
 declare global {
 	namespace App {
@@ -10,7 +11,7 @@ declare global {
 			session: Session | null;
 		}
 		interface PageData {
-			user: User | null;
+			user: ClientUser | null;
 		}
 		// interface PageState {}
 		// interface Platform {}
