@@ -11,7 +11,15 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"format": "prettier --write .",
-		"lint": "prettier --check ."
+		"lint": "prettier --check .",
+		"test": "bun test",
+		"test:watch": "bun test --watch",
+		"test:auth": "bun test src/tests/api/auth.test.ts",
+		"test:projects": "bun test src/tests/api/projects.test.ts",
+		"test:domains": "bun test src/tests/api/domains.test.ts", 
+		"test:databases": "bun test src/tests/api/databases.test.ts",
+		"test:system": "bun test src/tests/api/system.test.ts",
+		"migrate": "bun run migrate-db.js"
 	},
 	"devDependencies": {
 		"@dnd-kit-svelte/core": "^0.0.8",
@@ -27,6 +35,7 @@
 		"@tailwindcss/vite": "^4.0.0",
 		"@tanstack/table-core": "^8.20.5",
 		"@types/bcryptjs": "^3.0.0",
+		"@types/bun": "^1.2.15",
 		"@types/d3-scale": "^4.0.8",
 		"@types/d3-shape": "^3.1.7",
 		"@types/dockerode": "^3.3.40",
