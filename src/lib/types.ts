@@ -7,6 +7,14 @@ export interface User {
     created_at: Date;
 }
 
+export interface ClientUser {
+    id: number;
+    username: string;
+    email?: string | null;
+    isAdmin: boolean;
+    githubInstallations?: number[];
+}
+
 export interface LoginCredentials {
     username: string;
     password: string;
@@ -24,11 +32,11 @@ export interface Project {
     start_command: string;
     port?: number;
     environment_variables: Record<string, string>;
-    status: 'running' | 'stopped' | 'building' | 'failed';
+    status: 'running' | 'stopped' | 'building' | 'failed' | 'stopping';
     container_id?: string;
     process_id?: number;
     deployment_type: 'docker' | 'pm2';
-    runtime?: string;
+    runtime?: 'bun' | 'node' | 'python' | 'deno' | 'go' | 'static' | 'php' | 'rust';
     domain?: string;
     custom_domain?: string;
     description?: string;
@@ -48,16 +56,42 @@ export interface Project {
         author: string;
         url: string;
     };
+    
+    // Enhanced fields for better API support
+    project_type?: 'api' | 'web' | 'static' | 'cli' | 'desktop';
+    template_used?: string;
+    runtime_optimized?: boolean;
+    dockerfile_content?: string;
+    build_timeout?: number;
+    deployment_config?: Record<string, any>;
+    
+    // API response enhanced fields
+    repository?: {
+        name: string;
+        html_url: string;
+        language?: string;
+        description?: string;
+    };
+    status_display?: string;
 }
 
 export interface CreateProjectRequest {
     name: string;
-    github_url: string;
+    repository_url?: string; // New primary field
+    github_url?: string; // Backward compatibility
     github_branch?: string;
+    branch?: string; // alias
     build_command?: string;
     start_command?: string;
     port?: number;
+    runtime?: Project['runtime'];
+    project_type?: Project['project_type'];
+    template?: string; // Reference to PROJECT_TEMPLATES
     environment_variables?: Record<string, string>;
+    custom_domain?: string;
+    auto_deploy?: boolean;
+    tech_stack?: string[];
+    description?: string;
 }
 
 // Deployment types
