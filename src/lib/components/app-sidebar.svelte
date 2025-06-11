@@ -13,6 +13,7 @@
 	const data = {
 		user: {
 			name: "Developer",
+			username: "Developer",
 			email: "dev@md0.com",
 			avatar: "/logo.png",
 		},
@@ -62,6 +63,7 @@
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 	import type { ComponentProps } from "svelte";
 	import { SettingsIcon } from "lucide-svelte";
+	import type { ClientUser } from '$lib/types.js';
 
 	let {
 		user = null,
@@ -69,12 +71,13 @@
 		collapsible = "icon",
 		...restProps
 	}: ComponentProps<typeof Sidebar.Root> & { 
-		user?: { id: string; username: string; email: string | null; isAdmin: boolean } | null 
+		user?: ClientUser | null 
 	} = $props();
 	
 	// Use real user data if available, otherwise fallback to default
 	const userData = $derived(user ? {
 		name: user.username,
+		username: user.username,
 		email: user.email || "user@md0.com",
 		avatar: "/avatar.png"
 	} : data.user);

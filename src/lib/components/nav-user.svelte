@@ -5,6 +5,7 @@
 	import { useSidebar } from "$lib/components/ui/sidebar/index.js";
 	import { goto } from '$app/navigation';
 	import { toggleMode } from 'mode-watcher';
+	import { authStore } from '$lib/stores/auth.svelte.js';
 	import BadgeCheckIcon from "@lucide/svelte/icons/badge-check";
 	import BellIcon from "@lucide/svelte/icons/bell";
 	import ChevronsUpDownIcon from "@lucide/svelte/icons/chevrons-up-down";
@@ -15,17 +16,22 @@
 	import MoonIcon from "@lucide/svelte/icons/moon";
 	import SettingsIcon from "@lucide/svelte/icons/settings";
 
-	let { user }: { user: { name: string; email: string; avatar: string } } = $props();
+	let { user }: { user: { name?: string; username: string; email?: string; avatar?: string } } = $props();
 	const sidebar = useSidebar();
 	
 	async function logout() {
 		try {
-			await fetch('/api/auth/logout', { method: 'POST' });
+			await authStore.logout();
 			goto('/login');
 		} catch (err) {
 			console.error('Logout error:', err);
 		}
 	}
+
+	// Compute display values
+	const displayName = $derived(user.name || user.username);
+	const displayEmail = $derived(user.email || '');
+	const avatarUrl = $derived(user.avatar || '');
 </script>
 
 <!-- User info section -->
@@ -38,15 +44,15 @@
 				aria-label="User menu"
 			>
 				<Avatar.Root class="h-8 w-8 rounded-lg">
-					<Avatar.Image src={user.avatar} alt={user.name} />
-					<Avatar.Fallback class="rounded-lg text-xs">{user.name.split(' ').map(n => n[0]).join('').toUpperCase()}</Avatar.Fallback>
+					<Avatar.Image src={avatarUrl} alt={displayName} />
+					<Avatar.Fallback class="rounded-lg text-xs">{displayName.split(' ').map(n => n[0]).join('').toUpperCase()}</Avatar.Fallback>
 				</Avatar.Root>
 			</DropdownMenu.Trigger>
 			<DropdownMenu.Content class="w-56" align="end" side="right">
 				<DropdownMenu.Label class="font-normal">
 					<div class="flex flex-col space-y-1">
-						<p class="text-sm font-medium leading-none">{user.name}</p>
-						<p class="text-xs leading-none text-muted-foreground">{user.email}</p>
+						<p class="text-sm font-medium leading-none">{displayName}</p>
+						<p class="text-xs leading-none text-muted-foreground">{displayEmail}</p>
 					</div>
 				</DropdownMenu.Label>
 				<DropdownMenu.Separator />
@@ -68,12 +74,12 @@
 		<!-- Expanded state: full layout -->
 		<div class="flex items-center gap-2 p-3 border-t">
 			<Avatar.Root class="h-8 w-8 rounded-lg shrink-0">
-				<Avatar.Image src={user.avatar} alt={user.name} />
-				<Avatar.Fallback class="rounded-lg text-xs">{user.name.split(' ').map(n => n[0]).join('').toUpperCase()}</Avatar.Fallback>
+				<Avatar.Image src={avatarUrl} alt={displayName} />
+				<Avatar.Fallback class="rounded-lg text-xs">{displayName.split(' ').map(n => n[0]).join('').toUpperCase()}</Avatar.Fallback>
 			</Avatar.Root>
 			<div class="flex flex-col text-left text-sm leading-tight flex-1 min-w-0">
-				<span class="truncate font-medium">{user.name}</span>
-				<span class="truncate text-xs text-muted-foreground">{user.email}</span>
+				<span class="truncate font-medium">{displayName}</span>
+				<span class="truncate text-xs text-muted-foreground">{displayEmail}</span>
 			</div>
 			<div class="flex items-center gap-1 shrink-0">
 				<!-- Theme toggle button -->
@@ -95,6 +101,7 @@
 					class="flex items-center justify-center h-8 w-8 rounded-md hover:bg-destructive hover:text-destructive-foreground transition-colors text-muted-foreground"
 					aria-label="Logout"
 					title="Logout"
+					disabled={authStore.loading}
 				>
 					<LogOutIcon class="h-4 w-4" />
 				</button>
