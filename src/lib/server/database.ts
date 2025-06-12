@@ -96,11 +96,32 @@ export const dbUtils = {
         return result[0];
     },
 
-    async addDeploymentLog(projectId: number, logType: string, message: string) {
-        await db`
-            INSERT INTO deployment_logs (project_id, log_type, message)
-            VALUES (${projectId}, ${logType}, ${message})
+    async addDeploymentLog(projectId: number, logType: string, message: string, level: string = 'info') {
+        const result = await db`
+            INSERT INTO deployment_logs (project_id, log_type, level, message)
+            VALUES (${projectId}, ${logType}, ${level}, ${message})
+            RETURNING *
         `;
+        
+        // Broadcast to realtime service if available
+        try {
+            const { realtimeService } = await import('$lib/service/realtime.js');
+            const project = await this.getProject(projectId.toString());
+            if (project) {
+                await realtimeService.streamDeploymentLog(
+                    projectId,
+                    crypto.randomUUID(),
+                    logType,
+                    level,
+                    message,
+                    project.created_by
+                );
+            }
+        } catch (error) {
+            console.warn('Failed to broadcast deployment log to realtime service:', error);
+        }
+        
+        return result[0];
     },
 
     async getDeploymentLogs(projectId: string, limit: number = 50) {
@@ -394,7 +415,7 @@ export const dbUtils = {
         github_branch: string;
     }>) {
         // Map github_branch to branch for database
-        const dbUpdates = { ...updates };
+        const dbUpdates: any = { ...updates };
         if (dbUpdates.github_branch) {
             dbUpdates.branch = dbUpdates.github_branch;
             delete dbUpdates.github_branch;

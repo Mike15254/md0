@@ -28,8 +28,9 @@ export class GitHubService extends BaseService {
 				value: string;
 			}
 
+			// Use 'github' category to match the new settings API
 			const settings = (await this.executeQuery(
-				db`SELECT key, value FROM settings WHERE category = 'github_app'`
+				db`SELECT key, value FROM settings WHERE category = 'github'`
 			)) as SettingRecord[];
 
 			const config: Partial<GitHubAppConfig> = {};
@@ -519,6 +520,40 @@ export class GitHubService extends BaseService {
 			branch: payload.ref?.replace('refs/heads/', ''),
 			commit: payload.head_commit?.id?.substring(0, 7)
 		});
+	}
+
+	/**
+	 * Check if GitHub App is configured
+	 */
+	async isConfigured(): Promise<boolean> {
+		try {
+			await this.loadConfig();
+			return !!this.config;
+		} catch (error) {
+			return false;
+		}
+	}
+
+	/**
+	 * Get GitHub App installation URL
+	 */
+	getInstallationUrl(): string {
+		return 'https://github.com/apps/mdo-0/installations/new';
+	}
+
+	/**
+	 * Get GitHub App status for settings page
+	 */
+	async getAppStatus(): Promise<ServiceResponse<{ configured: boolean; installUrl: string }>> {
+		try {
+			const configured = await this.isConfigured();
+			return this.createResponse(true, {
+				configured,
+				installUrl: this.getInstallationUrl()
+			});
+		} catch (error) {
+			return this.handleError(error);
+		}
 	}
 }
 

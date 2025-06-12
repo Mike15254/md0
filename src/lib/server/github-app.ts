@@ -42,10 +42,11 @@ class GitHubAppService {
             const { dbUtils } = await import('./database.js');
             const settings = await dbUtils.getSettings();
             
-            const appIdSetting = settings.find(s => s.category === 'githubApp' && s.key === 'app_id');
-            const privateKeySetting = settings.find(s => s.category === 'githubApp' && s.key === 'private_key');
-            const clientIdSetting = settings.find(s => s.category === 'githubApp' && s.key === 'client_id');
-            const clientSecretSetting = settings.find(s => s.category === 'githubApp' && s.key === 'client_secret');
+            // Look for both 'github' and 'githubApp' categories for compatibility
+            const appIdSetting = settings.find(s => (s.category === 'github' || s.category === 'githubApp') && s.key === 'app_id');
+            const privateKeySetting = settings.find(s => (s.category === 'github' || s.category === 'githubApp') && s.key === 'private_key');
+            const clientIdSetting = settings.find(s => (s.category === 'github' || s.category === 'githubApp') && s.key === 'client_id');
+            const clientSecretSetting = settings.find(s => (s.category === 'github' || s.category === 'githubApp') && s.key === 'client_secret');
 
             this.appId = appIdSetting?.value || process.env.GITHUB_APP_ID || '';
             this.privateKey = privateKeySetting?.value || process.env.GITHUB_APP_PRIVATE_KEY || '';
@@ -53,7 +54,10 @@ class GitHubAppService {
             this.clientSecret = clientSecretSetting?.value || process.env.GITHUB_APP_CLIENT_SECRET || '';
 
             if (!this.appId || !this.privateKey || !this.clientId || !this.clientSecret) {
-                throw new Error('GitHub App configuration not found in database or environment variables');
+                console.warn('GitHub App not fully configured - some settings missing');
+                // Don't throw error, just mark as not initialized
+                this.initialized = false;
+                return;
             }
 
             this.initialized = true;
@@ -63,9 +67,23 @@ class GitHubAppService {
         }
     }
 
+    // Check if GitHub App is properly configured
+    async isConfigured(): Promise<boolean> {
+        try {
+            await this.initializeConfig();
+            return this.initialized && !!this.appId && !!this.privateKey && !!this.clientId && !!this.clientSecret;
+        } catch (error) {
+            return false;
+        }
+    }
+
     // Generate JWT for GitHub App authentication
     async generateJWT(): Promise<string> {
         await this.initializeConfig();
+        
+        if (!this.initialized) {
+            throw new Error('GitHub App not configured. Please configure GitHub App settings first.');
+        }
         
         const now = Math.floor(Date.now() / 1000);
         
