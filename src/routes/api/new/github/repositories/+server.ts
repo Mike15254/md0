@@ -1,44 +1,54 @@
 import { json } from '@sveltejs/kit';
-import type { RequestHandler } from './$types';
-import { requireAuth } from '$lib/server/auth.js';
+import { GitHubService } from '$lib/service/github.js';
+import { type RequestEvent } from "@sveltejs/kit";
 
 // Get repositories accessible through GitHub App for new project creation
-export const GET: RequestHandler = async ({ locals, url }) => {
+export const GET = async ({ locals, url }: RequestEvent) => {
     try {
-        const user = requireAuth(locals);
+        if (!locals.user) {
+            return json({ error: 'Authentication required' }, { status: 401 });
+        }
         
-        const { githubAppService } = await import('$lib/server/github-app.js');
-        const { dbUtils } = await import('$lib/server/database.js');
+        const githubService = new GitHubService();
         
-        // Get query parameters
-        const searchQuery = url.searchParams.get('search') || '';
-        const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 100);
-        
-        // Get all active GitHub App installations
-        const installations = await dbUtils.getAllActiveGitHubAppInstallations();
-        
-        if (installations.length === 0) {
+        // Check if GitHub App is configured
+        const isConfigured = await githubService.isConfigured();
+        if (!isConfigured) {
             return json({
                 success: true,
                 data: {
                     repositories: [],
                     hasInstallation: false,
-                    total: 0
+                    total: 0,
+                    message: 'GitHub App not configured'
                 }
             });
         }
         
-        // Fetch repositories for all installations
-        const allRepositories = [];
+        // Get query parameters
+        const searchQuery = url.searchParams.get('search') || '';
+        const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 100);
         
-        for (const installation of installations) {
-            try {
-                const repositories = await githubAppService.getInstallationRepositories(
-                    installation.installation_id
-                );
-                allRepositories.push(...repositories);
-            } catch (error) {
-                console.error(`Failed to fetch repos for installation ${installation.installation_id}:`, error);
+        // Get all GitHub App installations
+        const installationsResult = await githubService.getInstallations();
+        
+        if (!installationsResult.success || !installationsResult.data || installationsResult.data.length === 0) {
+            return json({
+                success: true,
+                data: {
+                    repositories: [],
+                    hasInstallation: false,
+                    total: 0,
+                    message: 'No GitHub App installations found'
+                }
+            });
+        }
+        
+        // Collect all repositories from all installations
+        const allRepositories = [];
+        for (const installation of installationsResult.data) {
+            if (installation.repositories) {
+                allRepositories.push(...installation.repositories);
             }
         }
         
@@ -71,7 +81,8 @@ export const GET: RequestHandler = async ({ locals, url }) => {
             description: repo.description,
             // Additional fields useful for project creation
             suggested_name: repo.name.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase(),
-            repository_url: repo.html_url
+            repository_url: repo.html_url,
+            installation_id: repo.installation_id
         }));
         
         return json({
@@ -81,7 +92,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
                 hasInstallation: true,
                 total: filteredRepositories.length,
                 showing: transformedRepositories.length,
-                installationCount: installations.length
+                installationCount: installationsResult.data?.length || 0
             }
         });
         
