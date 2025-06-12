@@ -12,6 +12,8 @@
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Skeleton } from '$lib/components/ui/skeleton/index.js';
 	import { getStatusColor, getStatusIcon, formatUptime, formatRelativeTime } from '$lib/utils.js';
+	import LiveLogsPanel from '$lib/components/live-logs-panel.svelte';
+	import ProjectStatusGrid from '$lib/components/project-status-grid.svelte';
 	import {
 		Plus,
 		Server,
@@ -20,7 +22,9 @@
 		BarChart3,
 		GitBranch,
 		ExternalLink,
-		AlertCircle
+		AlertCircle,
+		Terminal,
+		Zap
 	} from 'lucide-svelte';
 	import { authStore } from '$lib/stores/auth.svelte.js';
 	import { api } from '$lib/stores/data.svelte.js';
@@ -43,18 +47,20 @@
 
 	onMount(() => {
 		loadDashboardData();
-		// Refresh data every 30 seconds
-		const interval = setInterval(loadDashboardData, 30000);
+		// Refresh data every 30 seconds for non-realtime data
+		const interval = setInterval(() => {
+			loadDashboardData(false); // Don't show loading on refresh
+		}, 30000);
 		return () => clearInterval(interval);
 	});
 
-	async function loadDashboardData() {
+	async function loadDashboardData(showLoading = true) {
 		try {
-			loading = true;
+			if (showLoading) loading = true;
 			error = '';
 
 			// Load projects using data store
-			const projectsData = await api.getProjects({ limit: 10 });
+			const projectsData = await api.getProjects({ limit: 20 }); // Increased for better overview
 			projects = projectsData || [];
 
 			// Load project stats
@@ -68,7 +74,7 @@
 			console.error('Dashboard load error:', err);
 			error = 'Failed to load dashboard data';
 		} finally {
-			loading = false;
+			if (showLoading) loading = false;
 		}
 	}
 
@@ -100,247 +106,156 @@
 		<!-- Page Header -->
 		<div class="flex flex-col gap-2">
 			<h1 class="text-3xl font-bold tracking-tight">Dashboard</h1>
-			<p class="text-muted-foreground">Overview of your projects and system resources</p>
+			<p class="text-muted-foreground">Real-time overview of your projects and deployments</p>
 		</div>
 
-		<!-- System Overview Cards -->
-		<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-			<Card class="transition-shadow hover:shadow-md">
-				<CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
-					<CardTitle class="text-sm font-medium">Total Projects</CardTitle>
-					<div class="text-muted-foreground h-4 w-4">📦</div>
-				</CardHeader>
-				<CardContent>
-					<div class="text-2xl font-bold">{projectStats.total}</div>
-					<p class="text-muted-foreground mt-1 text-xs">Deployed applications</p>
-				</CardContent>
-			</Card>
+		<!-- Enhanced Project Status Grid with Live Updates -->
+		<ProjectStatusGrid {projects} maxProjects={6} />
 
-			<Card class="transition-shadow hover:shadow-md">
-				<CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
-					<CardTitle class="text-sm font-medium">Running</CardTitle>
-					<div class="h-4 w-4 text-green-600">●</div>
-				</CardHeader>
-				<CardContent>
-					<div class="text-2xl font-bold text-green-600">{projectStats.running}</div>
-					<p class="text-muted-foreground mt-1 text-xs">Active services</p>
-				</CardContent>
-			</Card>
-
-			<Card class="transition-shadow hover:shadow-md">
-				<CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
-					<CardTitle class="text-sm font-medium">Stopped</CardTitle>
-					<div class="h-4 w-4 text-yellow-600">⏸</div>
-				</CardHeader>
-				<CardContent>
-					<div class="text-2xl font-bold text-yellow-600">{projectStats.stopped}</div>
-					<p class="text-muted-foreground mt-1 text-xs">Inactive services</p>
-				</CardContent>
-			</Card>
-
-			<Card class="transition-shadow hover:shadow-md">
-				<CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
-					<CardTitle class="text-sm font-medium">Errors</CardTitle>
-					<div class="h-4 w-4 text-red-600">✕</div>
-				</CardHeader>
-				<CardContent>
-					<div class="text-2xl font-bold text-red-600">{projectStats.error}</div>
-					<p class="text-muted-foreground mt-1 text-xs">Need attention</p>
-				</CardContent>
-			</Card>
-		</div>
-
-		<!-- System Resources -->
-		{#if loading}
-			<Card class="transition-shadow hover:shadow-md">
-				<CardHeader>
-					<CardTitle class="flex items-center gap-2">
-						<Server class="h-5 w-5" />
-						System Resources
-					</CardTitle>
-					<CardDescription>Current server resource usage</CardDescription>
-				</CardHeader>
-				<CardContent>
-					<div class="grid grid-cols-1 gap-6 md:grid-cols-3">
-						<div class="space-y-2">
-							<Skeleton class="h-4 w-20" />
-							<Skeleton class="h-2 w-full" />
-						</div>
-						<div class="space-y-2">
-							<Skeleton class="h-4 w-24" />
-							<Skeleton class="h-2 w-full" />
-						</div>
-						<div class="space-y-2">
-							<Skeleton class="h-4 w-20" />
-							<Skeleton class="h-2 w-full" />
-						</div>
-					</div>
-				</CardContent>
-			</Card>
-		{:else if systemMetrics}
-			<Card class="transition-shadow hover:shadow-md">
-				<CardHeader>
-					<CardTitle class="flex items-center gap-2">
-						<Server class="h-5 w-5" />
-						System Resources
-					</CardTitle>
-					<CardDescription>Current server resource usage</CardDescription>
-				</CardHeader>
-				<CardContent>
-					<div class="grid grid-cols-1 gap-6 md:grid-cols-3">
-						<div class="space-y-2">
-							<div class="flex justify-between text-sm">
-								<span class="flex items-center gap-2">
-									<div class="h-2 w-2 rounded-full bg-blue-500"></div>
-									CPU Usage
-								</span>
-								<span class="font-medium">{systemMetrics.cpu_usage?.toFixed(1) ?? 'N/A'}%</span>
-							</div>
-							<div class="bg-secondary h-2 w-full overflow-hidden rounded-full">
-								<div
-									class="h-full rounded-full bg-blue-500 transition-all duration-500"
-									style="width: {Math.min(systemMetrics.cpu_usage ?? 0, 100)}%"
-								></div>
-							</div>
-						</div>
-
-						<div class="space-y-2">
-							<div class="flex justify-between text-sm">
-								<span class="flex items-center gap-2">
-									<div class="h-2 w-2 rounded-full bg-green-500"></div>
-									Memory Usage
-								</span>
-								<span class="font-medium"
-									>{systemMetrics.memory_usage_percent?.toFixed(1) ?? 'N/A'}%</span
-								>
-							</div>
-							<div class="bg-secondary h-2 w-full overflow-hidden rounded-full">
-								<div
-									class="h-full rounded-full bg-green-500 transition-all duration-500"
-									style="width: {Math.min(systemMetrics.memory_usage_percent ?? 0, 100)}%"
-								></div>
-							</div>
-						</div>
-
-						<div class="space-y-2">
-							<div class="flex justify-between text-sm">
-								<span class="flex items-center gap-2">
-									<div class="h-2 w-2 rounded-full bg-orange-500"></div>
-									Disk Usage
-								</span>
-								<span class="font-medium"
-									>{systemMetrics.disk_usage_percent?.toFixed(1) ?? 'N/A'}%</span
-								>
-							</div>
-							<div class="bg-secondary h-2 w-full overflow-hidden rounded-full">
-								<div
-									class="h-full rounded-full bg-orange-500 transition-all duration-500"
-									style="width: {Math.min(systemMetrics.disk_usage_percent ?? 0, 100)}%"
-								></div>
-							</div>
-						</div>
-					</div>
-				</CardContent>
-			</Card>
-		{/if}
-
-		<!-- Recent Projects -->
-		<Card class="transition-shadow hover:shadow-md">
-			<CardHeader class="flex flex-row items-center justify-between">
-				<div>
-					<CardTitle class="flex items-center gap-2">
-						<GitBranch class="h-5 w-5" />
-						Recent Projects
-					</CardTitle>
-					<CardDescription>Your deployed applications</CardDescription>
-				</div>
-				<div class="flex items-center gap-2">
-					<Button onclick={loadDashboardData} variant="outline" size="sm" disabled={loading}>
-						<Activity class="mr-2 h-4 w-4 {loading ? 'animate-spin' : ''}" />
-						Refresh
-					</Button>
-					<Button onclick={() => goto('/projects')} variant="outline">
-						<ExternalLink class="mr-2 h-4 w-4" />
-						View All
-					</Button>
-				</div>
-			</CardHeader>
-			<CardContent>
+		<!-- Two Column Layout: System Resources + Live Logs -->
+		<div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+			<!-- System Resources (1/3 width on xl screens) -->
+			<div class="xl:col-span-1">
 				{#if loading}
-					<div class="space-y-4">
-						{#each Array(3) as _}
-							<div class="flex items-center justify-between rounded-lg border p-4">
-								<div class="flex items-center space-x-4">
-									<Skeleton class="h-6 w-6 rounded-full" />
-									<div class="space-y-2">
-										<Skeleton class="h-4 w-32" />
-										<Skeleton class="h-3 w-48" />
-									</div>
+					<Card class="transition-shadow hover:shadow-md">
+						<CardHeader>
+							<CardTitle class="flex items-center gap-2">
+								<Server class="h-5 w-5" />
+								System Resources
+							</CardTitle>
+							<CardDescription>Current server resource usage</CardDescription>
+						</CardHeader>
+						<CardContent>
+							<div class="grid grid-cols-1 gap-6">
+								<div class="space-y-2">
+									<Skeleton class="h-4 w-20" />
+									<Skeleton class="h-2 w-full" />
 								</div>
-								<div class="flex items-center space-x-4">
-									<Skeleton class="h-6 w-16" />
-									<Skeleton class="h-3 w-20" />
-									<Skeleton class="h-8 w-8" />
+								<div class="space-y-2">
+									<Skeleton class="h-4 w-24" />
+									<Skeleton class="h-2 w-full" />
+								</div>
+								<div class="space-y-2">
+									<Skeleton class="h-4 w-20" />
+									<Skeleton class="h-2 w-full" />
 								</div>
 							</div>
-						{/each}
-					</div>
-				{:else if projects.length === 0}
-					<div class="py-12 text-center">
-						<div class="text-muted-foreground mx-auto mb-4 h-12 w-12">
-							<GitBranch class="h-full w-full" />
-						</div>
-						<h3 class="mb-2 text-lg font-semibold">No projects yet</h3>
-						<p class="text-muted-foreground mx-auto mb-6 max-w-sm">
-							Deploy your first project to start building and managing applications on your server.
-						</p>
-						<Button onclick={() => goto('/projects/new')} class="gap-2">
-							<Plus class="h-4 w-4" />
-							Deploy Your First Project
-						</Button>
-					</div>
-				{:else}
-					<div class="space-y-4">
-						{#each projects.slice(0, 5) as project}
-							<div
-								class="group hover:bg-accent/50 flex items-center justify-between rounded-lg border p-4 transition-colors"
-							>
-								<div class="flex items-center space-x-4">
-									<div class="flex items-center space-x-3">
-										<span class="text-lg">{getStatusIcon(project.status)}</span>
-										<div class="min-w-0 flex-1">
-											<h3 class="truncate font-medium">{project.name}</h3>
-											<p class="text-muted-foreground truncate text-sm">
-												{project.github_url
-													? project.github_url.split('/').slice(-2).join('/')
-													: 'No repository'}
-											</p>
-										</div>
-									</div>
-								</div>
-								<div class="flex flex-shrink-0 items-center space-x-4">
-									<Badge variant="outline" class={getStatusColor(project.status)}>
-										{project.status}
-									</Badge>
-									{#if project.last_deployed_at}
-										<span class="text-muted-foreground text-xs">
-											{formatRelativeTime(project.last_deployed_at)}
+						</CardContent>
+					</Card>
+				{:else if systemMetrics}
+					<Card class="transition-shadow hover:shadow-md">
+						<CardHeader>
+							<CardTitle class="flex items-center gap-2">
+								<Server class="h-5 w-5" />
+								System Resources
+							</CardTitle>
+							<CardDescription>Current server resource usage</CardDescription>
+						</CardHeader>
+						<CardContent>
+							<div class="grid grid-cols-1 gap-6">
+								<div class="space-y-2">
+									<div class="flex justify-between text-sm">
+										<span class="flex items-center gap-2">
+											<div class="h-2 w-2 rounded-full bg-blue-500"></div>
+											CPU Usage
 										</span>
-									{/if}
-									<Button
-										onclick={() => goto(`/projects/${project.name}`)}
-										variant="ghost"
-										size="sm"
-										class="opacity-0 transition-opacity group-hover:opacity-100"
-									>
-										<ExternalLink class="h-4 w-4" />
-									</Button>
+										<span class="font-medium">{systemMetrics.cpu_usage?.toFixed(1) ?? 'N/A'}%</span>
+									</div>
+									<div class="bg-secondary h-2 w-full overflow-hidden rounded-full">
+										<div
+											class="h-full rounded-full bg-blue-500 transition-all duration-500"
+											style="width: {Math.min(systemMetrics.cpu_usage ?? 0, 100)}%"
+										></div>
+									</div>
+								</div>
+
+								<div class="space-y-2">
+									<div class="flex justify-between text-sm">
+										<span class="flex items-center gap-2">
+											<div class="h-2 w-2 rounded-full bg-green-500"></div>
+											Memory Usage
+										</span>
+										<span class="font-medium"
+											>{systemMetrics.memory_usage_percent?.toFixed(1) ?? 'N/A'}%</span
+										>
+									</div>
+									<div class="bg-secondary h-2 w-full overflow-hidden rounded-full">
+										<div
+											class="h-full rounded-full bg-green-500 transition-all duration-500"
+											style="width: {Math.min(systemMetrics.memory_usage_percent ?? 0, 100)}%"
+										></div>
+									</div>
+								</div>
+
+								<div class="space-y-2">
+									<div class="flex justify-between text-sm">
+										<span class="flex items-center gap-2">
+											<div class="h-2 w-2 rounded-full bg-orange-500"></div>
+											Disk Usage
+										</span>
+										<span class="font-medium"
+											>{systemMetrics.disk_usage_percent?.toFixed(1) ?? 'N/A'}%</span
+										>
+									</div>
+									<div class="bg-secondary h-2 w-full overflow-hidden rounded-full">
+										<div
+											class="h-full rounded-full bg-orange-500 transition-all duration-500"
+											style="width: {Math.min(systemMetrics.disk_usage_percent ?? 0, 100)}%"
+										></div>
+									</div>
+								</div>
+
+								<!-- Additional system info -->
+								<div class="pt-4 border-t space-y-2">
+									<div class="flex justify-between text-sm">
+										<span class="text-muted-foreground">Uptime</span>
+										<span class="font-medium">
+											{systemMetrics.uptime ? formatUptime(systemMetrics.uptime) : 'N/A'}
+										</span>
+									</div>
+									<div class="flex justify-between text-sm">
+										<span class="text-muted-foreground">Load Average</span>
+										<span class="font-medium font-mono">
+											{systemMetrics.load_average ? (Array.isArray(systemMetrics.load_average) ? (systemMetrics.load_average[0] as number)?.toFixed(2) : (systemMetrics.load_average as number)?.toFixed(2)) : 'N/A'}
+										</span>
+									</div>
 								</div>
 							</div>
-						{/each}
-					</div>
+						</CardContent>
+					</Card>
 				{/if}
-			</CardContent>
-		</Card>
+
+				<!-- Quick Actions -->
+				<Card class="mt-6">
+					<CardHeader>
+						<CardTitle class="flex items-center gap-2 text-lg">
+							<Zap class="h-5 w-5" />
+							Quick Actions
+						</CardTitle>
+					</CardHeader>
+					<CardContent class="space-y-3">
+						<Button onclick={() => goto('/projects/new')} class="w-full gap-2">
+							<Plus class="h-4 w-4" />
+							Deploy New Project
+						</Button>
+						<Button variant="outline" onclick={() => goto('/projects')} class="w-full gap-2">
+							<GitBranch class="h-4 w-4" />
+							Manage Projects
+						</Button>
+						<Button variant="outline" onclick={() => goto('/settings')} class="w-full gap-2">
+							<Server class="h-4 w-4" />
+							Server Settings
+						</Button>
+					</CardContent>
+				</Card>
+			</div>
+
+			<!-- Live Logs Panel (2/3 width on xl screens) -->
+			<div class="xl:col-span-2">
+				<div class="h-[600px]">
+					<LiveLogsPanel {projects} maxLogs={100} />
+				</div>
+			</div>
+		</div>
 	{/if}
 </div>
